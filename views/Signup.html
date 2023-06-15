@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blood Bank</title>
+    <link rel="icon" type="image/x-icon" href="../public/img/blood-logo.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="../public/style/signup.css">
+    <script defer src="../public/script/signup.js"></script>
+</head>
+<body>
+    <main class="">
+        <nav class="w-full h-16 p-2 border-2 border-b-2 boder-slate-900 flex items-center justify-between backdrop-blur-sm">
+            <div class="h-full w-20 ml-10 flex justify-center items-center self-start animate-pulse duration-900">
+                <a href="Signup.html">
+                    <img src="../public/img/blood-logo.png" alt="Blood Logo">
+                </a>
+            </div>
+            <div class="flex justify-center items-center h-full self-end mr-10">
+                <p class="logout-p self-end text-rose-500 font-medium self-center cursor-pointer">Log Out</p>
+                <div class="w-10 h-10 bg-slate-200 flex justify-center items-center rounded-full ml-4 cursor-pointer transition duration-700 hover:bg-slate-300 ease-in-out ">
+                    <img src="../public/img/notifbutton.png" alt="Bell Icon" class="h-4">
+                </div>
+            </div>
+        </nav>
+        <div class="w-full h-full p-2 overflow-hidden flex flex-col items-center justify-center font-sans">
+            <div class="flex flex-col justify-center items-center">
+                <p class="text-5xl font-medium"><span class="text-rose-500">B</span>lood <span class="text-rose-600">B</span>ank</p>
+                <p class="text-2xl font-medium tracking-wide"><span class="text-rose-500">M</span>anagement <span class="text-rose-500">S</span>ystem</p>
+            </div>
+            <form action="">
+                <div class="w-96 h-96 bg-rose-300 mt-2 rounded-md px-2 py-4 z-20">
+                        <div class="w-full p-2 flex justify-center z-20">
+                            <input type="text" placeholder="Doctor's Name" class="w-11/12 p-2 rounded-md">
+                        </div>
+                        <div class="w-full p-2 flex justify-center z-20">
+                            <input type="text" placeholder="Degree" class="w-11/12 p-2 rounded-md">
+                        </div>
+                        <div class="w-full p-2 flex justify-center z-20">
+                            <input type="text" placeholder="Phonenumber" class="w-11/12 p-2 rounded-md">
+                        </div>
+                        <div class="w-full p-2 flex justify-center z-20">
+                            <input type="text" placeholder="Department" class="w-11/12 p-2 rounded-md">
+                        </div>
+                        <div class="w-full p-2 flex justify-center z-20">
+                            <input type="text" placeholder="Registration Number" class="w-11/12 p-2 rounded-md">
+                        </div>
+                        <div class="w-full p-2 flex justify-around items-center z-20">
+                            <label for="" class="text-lg font-medium">
+                                ID Proof
+                            </label>         
+                            <input type='file' id="file-input"/>
+                            <span id='val'></span>
+                            <span id='button' class="w-40 px-8 py-2 rounded-2xl cursor-pointer bg-rose-700 text-center text-white text-medium text-lg transition duration-500 hover:bg-rose-500 ">Upload</span>
+                        </div>
+                </div>
+                <input type="submit" class="mt-4 cursor-pointer transition duration-500 hover:bg-rose-500 bg-rose-700 text-center text-white w-96 px-8 py-3 rounded-2xl " value="Register">
+            </form>
+            <div class="fixed flex flex-col justify-center items-center left-0 transition duration-300 md:left-0 lg:left-44 top-48 background" >
+                <p class="font-thin text-base tracking-tight">GIVE THE GIFT OF LIFE</p>
+                <p class="text-2xl text-rose-500 "><span class="font-thin">Donate</span> <span class="font-semibold">Blood</span></p>
+                <img src="../public/img/signinbg1.png" alt="Background Image" class="mt-8">
+            </div>
+            <div class="fixed flex flex-col justify-center items-center right-56 bottom- background" >
+                <img src="../public/img/Group 31.png" alt="Background Image" class="mt-8 fixed  animated">
+                <img src="../public/img/people.png" alt="Background Image" class="mt-8 fixed  animated">
+            </div>
+        </div>
+    </main>
+</body>
+</html>
