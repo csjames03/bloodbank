@@ -3,10 +3,10 @@
 <nav class="h-screen w-72 flex flex-col fixed">
     <div class="w-full p-2 flex justify-center items-center flex-col">
         <p class="text-2xl font-medium tracking-wider">
-            <span class="text-rose-500">B</span>lood <span"text-rose-500">B</span>ank
+            <span class="text-rose-500">B</span>lood <span class="text-rose-500">B</span>ank
         </p>
         <p class="text-sm font-medium tracking-wide">
-            <span class="text-rose-500">M</span>anagement <span"text-rose-500">S</span>ystem
+            <span class="text-rose-500">M</span>anagement <span class="text-rose-500">S</span>ystem
         </p>
     </div>
     <div class="mt-20 px-8 flex flex-col z-100">
