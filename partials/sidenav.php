@@ -12,19 +12,21 @@
     <div class="mt-20 px-8 flex flex-col z-100">
         <div class="w-full  mb-4 flex items-center">
             <img src="../public/img/dashboardicon.png" alt="Dashboard Icon" class="w-7">
-            <p class="text-rose-500 font-medium ml-4 cursor-pointer">Dashboard</p>
+            <a href="./dashboard.php" class="text-rose-500 font-medium ml-4 cursor-pointer">Dashboard</a>
         </div>
         <div class="w-full  my-4 flex items-center">
             <img src="../public/img/stocksicon.png" alt="Dashboard Icon" class="w-7">
-            <p class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">Stocks</p>
+            <a href="./stocks.php" class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">Stocks</a>
         </div>
         <div class="w-full  my-4 flex items-center">
             <img src="../public/img/requestsicon.png" alt="Dashboard Icon" class="w-7">
-            <p class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">Requests</p>
+            <a href="./requests.php"
+                class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">Requests</a>
         </div>
         <div class="w-full  my-4 flex items-center">
             <img src="../public/img/donationsicon.png" alt="Dashboard Icon" class="w-7">
-            <p class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">Donations</p>
+            <a href="./donations.php" class="text-slate-500 font-medium ml-4 cursor-pointer hover:text-rose-300">
+                Donations</a>
         </div>
     </div>
     <div class="">
