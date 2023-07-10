@@ -1,0 +1,28 @@
+.hieght{
+    height: 470px;
+}
+
+@media (min-width: 640px) { 
+    .stocks-dashboard-container{
+        width: 35rem;
+    }
+
+}
+
+@media (min-width: 1024px) {
+    .stocks-dashboard-container{
+        width: 60rem;
+    }
+}
+
+
+@media (min-width: 1536px) {
+    .stocks-dashboard-container{
+        width: 70rem;
+    }
+}
+
+.h {
+    min-height: 130px;
+    max-height: 150px;
+}
