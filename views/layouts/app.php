@@ -4,10 +4,12 @@
 use App\Core\Session;
 use App\Repositories\NotificationRepository;
 use App\Repositories\RequestRepository;
+use App\Repositories\UnitRepository;
 
 $user = auth_user();
 $admin = is_admin();
 $pendingCount = $admin ? (new RequestRepository())->summary()['pending']['count'] : 0;
+$screeningCount = $admin ? (new UnitRepository())->quarantinedDonations() : 0;
 $notifs = (new NotificationRepository())->counts($user['role'], (int) $user['id']);
 $unreadLabel = $notifs['unread'] > 99 ? '99+' : (string) $notifs['unread'];
 
@@ -15,8 +17,10 @@ $nav = $admin
     ? [
         ['/', 'dashboard', 'Dashboard', 0],
         ['/requests', 'clipboard', 'Requests', $pendingCount],
+        ['/screening', 'shield', 'Screening', $screeningCount],
         ['/donations', 'heart', 'Donations', 0],
         ['/stocks', 'package', 'Blood stock', 0],
+        ['/units', 'droplet', 'Units', 0],
         ['/activity', 'activity', 'Activity', 0],
         ['/notifications', 'bell', 'Notifications', 0],
     ]
@@ -53,6 +57,8 @@ $nav = $admin
                         <span class="count" data-notif-count title="Unread notifications" <?= $notifs['unread'] ? '' : 'hidden' ?>><?= $unreadLabel ?></span>
                     <?php elseif ($admin && $path === '/requests'): ?>
                         <span class="count" data-pending-count title="Pending requests" <?= $count ? '' : 'hidden' ?>><?= $count ?></span>
+                    <?php elseif ($count > 0): ?>
+                        <span class="count count-soft" title="Donations awaiting screening"><?= $count ?></span>
                     <?php endif; ?>
                 </a>
             <?php endforeach; ?>

@@ -44,6 +44,7 @@ final class RequestController
             ),
             'summary'   => $requests->summary($filters['hospital_id']),
             'stock'     => (new BloodTypeRepository())->stockByCode(),
+            'expiry'    => Auth::isAdmin() ? (new BloodTypeRepository())->earliestExpiry() : [],
             'hospitals' => Auth::isAdmin() ? (new AccountRepository())->hospitals() : [],
         ]);
     }

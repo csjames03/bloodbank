@@ -10,9 +10,15 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/src/autoload.php';
 
+use App\Core\Config;
 use App\Domain\BloodGroup as G;
+use App\Domain\DiscardReason as D;
 use App\Domain\Priority;
 use App\Domain\RequestStatus as S;
+use App\Domain\ScreeningFailure as F;
+use App\Domain\UnitStatus as U;
+
+Config::set(require dirname(__DIR__) . '/config/config.php');
 
 $passed = 0;
 $failed = 0;
@@ -58,6 +64,21 @@ check('Pending cannot jump straight to received', !S::Pending->canTransitionTo(S
 check('In transit can be received or recalled', S::InTransit->canTransitionTo(S::Completed) && S::InTransit->canTransitionTo(S::Cancelled));
 check('Received and cancelled are final', !S::Completed->canTransitionTo(S::Cancelled) && !S::Cancelled->canTransitionTo(S::InTransit));
 check('Completed is labelled “Received”', S::Completed->label() === 'Received');
+
+echo PHP_EOL . "\033[1mUnits & screening\033[0m" . PHP_EOL;
+check('Only quarantined or available units can be discarded', U::Quarantine->canDiscard() && U::Available->canDiscard()
+    && !U::Dispatched->canDiscard() && !U::Expired->canDiscard() && !U::Discarded->canDiscard());
+check('HIV and hepatitis B/C defer the donor permanently', F::Hiv->isPermanentDeferral() && F::HepatitisB->isPermanentDeferral() && F::HepatitisC->isPermanentDeferral());
+check('Syphilis and malaria defer for a year', F::Syphilis->deferralDays() === 365 && F::Malaria->deferralDays() === 365 && !F::Malaria->isPermanentDeferral());
+check('A sample problem does not defer the donor', F::Sample->deferralDays() === null && !F::Sample->isPermanentDeferral());
+check('Every discard reason has a label', array_filter(D::cases(), static fn (D $d) => $d->label() === '') === []);
+
+echo PHP_EOL . "\033[1mExpiry labels\033[0m" . PHP_EOL;
+check('Expiry in 3 days', expiry_label(date(DATE_ATOM, time() + 3 * 86400 + 60)) === 'expires in 3 days');
+check('Expiry in a few hours', expiry_label(date(DATE_ATOM, time() + 5 * 3600 + 60)) === 'expires in 5h');
+check('Already expired', expiry_label(date(DATE_ATOM, time() - 2 * 86400 - 60)) === 'expired 2 days ago');
+check('Inside the warning window is danger', expiry_tone(date(DATE_ATOM, time() + 2 * 86400)) === 'danger');
+check('Far from expiry is neutral', expiry_tone(date(DATE_ATOM, time() + 30 * 86400)) === 'neutral');
 
 echo PHP_EOL . ($failed === 0 ? "\033[32m" : "\033[31m") . "{$passed} passed, {$failed} failed\033[0m" . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

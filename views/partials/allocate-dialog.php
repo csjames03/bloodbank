@@ -19,7 +19,7 @@
         <div class="dialog-body">
             <p class="field-hint" style="margin-bottom:12px">
                 Choose how many bags to send from each compatible group. The patient’s own group comes first and
-                O− (the universal donor) last. Stock is deducted when you dispatch.
+                O− (the universal donor) last. Within each group, the units that expire first are issued first.
             </p>
 
             <div class="alloc-table" role="group" aria-label="Bags per blood group" data-allocate-rows></div>

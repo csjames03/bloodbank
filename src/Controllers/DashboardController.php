@@ -10,6 +10,7 @@ use App\Repositories\AccountRepository;
 use App\Repositories\BloodTypeRepository;
 use App\Repositories\DonationRepository;
 use App\Repositories\RequestRepository;
+use App\Repositories\UnitRepository;
 
 final class DashboardController
 {
@@ -31,7 +32,10 @@ final class DashboardController
             'recentDonations' => (new DonationRepository())->recent(6),
             'openRequests'    => (new RequestRepository())->recent(5),
             'stock'      => array_column($inventory, 'bags', 'code'),
+            'expiry'     => (new BloodTypeRepository())->earliestExpiry(),
             'hospitals'  => (new AccountRepository())->hospitals(),
+            'screening'  => (new UnitRepository())->quarantinedDonations(),
+            'expiring'   => (new UnitRepository())->expiringSoon((int) config('inventory.expiry_warning_days'), 6),
         ]);
     }
 

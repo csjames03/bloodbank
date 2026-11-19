@@ -116,7 +116,7 @@ final class RequestRepository extends Repository
     }
 
     /**
-     * Add `allocation` (code => bags sent), `sent` (total) and `actors`
+     * Add `allocation` (code => bags sent), `sent` (total), `units` (bags sent, by code) and `actors`
      * (action => actor name, from the audit log) to each request row.
      *
      * @param list<array<string, mixed>> $rows
@@ -142,12 +142,14 @@ final class RequestRepository extends Repository
         }
 
         $actors = (new ActivityRepository($this->db))->actorsFor('request', $ids);
+        $units = (new UnitRepository($this->db))->forRequests($ids);
 
-        return array_map(static function (array $r) use ($allocations, $actors): array {
+        return array_map(static function (array $r) use ($allocations, $actors, $units): array {
             $id = (int) $r['id'];
             $r['allocation'] = $allocations[$id] ?? [];
             $r['sent'] = array_sum($r['allocation']);
             $r['actors'] = $actors[$id] ?? [];
+            $r['units'] = $units[$id] ?? [];
 
             return $r;
         }, $rows);

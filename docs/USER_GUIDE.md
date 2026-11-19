@@ -15,8 +15,9 @@ On phones, tap **☰** at the top left to open the menu.
 
 ### Dashboard
 
-- **Key figures:** bags in stock, pending requests, deliveries in transit, and bags donated this month. Tap a card to jump to the related list.
-- **Stock by blood group:** one tile per group. Tiles marked **Low** are at or below the threshold (5 bags by default), and **Out** means none are left. Tap a tile to see donations of that group.
+- **Key figures:** usable bags in stock, pending requests, deliveries in transit, and donations awaiting screening. Tap a card to jump to the related list.
+- **Expiring within 7 days:** units that will expire soon, with how long each has left. They're dispatched first automatically. This panel is a prompt to offer them to hospitals before they go to waste.
+- **Stock by blood group:** one tile per group, counting only screened, unexpired units. Tiles marked **Low** are at or below the threshold (5 bags by default), and **Out** means none are left. Tap a tile to see donations of that group.
 - **Requests & deliveries:** the triage queue, in the same order as the Requests page.
 - **Recent donations:** the latest people who gave blood.
 
@@ -60,23 +61,54 @@ To file a request for a hospital (for example, one phoned in), use **New request
 
 1. Click **Record donation**.
 2. Fill in the donor's details (age must be 16–65), choose the blood type, and enter the number of bags (1–2).
-3. Save. The bags are added to stock straight away.
+3. Save. Each bag becomes a **unit** with its own code (e.g. `LL000123`) and an expiry date **35 days** after collection. Units are held in **quarantine**: they don't count as stock until they pass lab screening.
 
 **Returning donors** are recognised by first name, last name and phone number. Capital letters, extra spaces and phone punctuation don't matter. The donation is added to their existing record, and their details are refreshed, rather than creating a duplicate person. Two safety checks apply:
 
 - **Donation interval:** a donor must wait **56 days** between donations (set `DONATION_INTERVAL_DAYS` to change it). If they're too early, the app shows the date they can give again.
-- **Blood group:** the group must match the one on record. If the lab has re-grouped the donor, correct their existing donation first.
+- **Blood group:** the group must match the one on record. If you think the record is wrong, record it under the group on file and correct it at screening.
+- **Deferral:** a donor who failed screening is refused, permanently for HIV or hepatitis, or until their deferral ends for syphilis or malaria.
+
+### Lab screening
+
+**Screening** (in the menu, with a badge showing how many donations are waiting) lists every donation in quarantine, oldest first, with its unit codes and how long they have left.
+
+- **Pass & release:** choose the blood group the lab confirmed (it defaults to the recorded one) and pass. The units become available stock. If you pick a different group, the donation, its units and the donor's record are all re-grouped.
+- **Fail:** choose the reason. Every unit is discarded, and the donor is deferred:
+  - HIV, hepatitis B or C: **permanently**;
+  - syphilis or malaria: **12 months**;
+  - a sample problem (clotted, insufficient, haemolysed): not deferred.
+
+A donation can only be screened once. Units that expire while still waiting are marked expired instead of being released.
+
+### Units
+
+**Units** lists every bag individually: its code, group, status, collection and expiry dates, and where it is now (in storage, awaiting the lab, which request and hospital it went to, or why it was discarded).
+
+- Filter by status (*Available*, *Expiring ≤ 7d*, *Awaiting screening*, *Dispatched*, *Expired*, *Discarded*), by blood group, or search a unit code.
+- **Discard** takes a unit out of stock for good. You must give a reason (damaged bag, cold-chain breach, haemolysed, clotted, labelling error, other), plus an optional note. Every discard is logged.
+
+### Expiry
+
+- Stock only ever counts unexpired units. A unit stops counting the moment it expires.
+- The app checks automatically: expired units are marked as such, and you're notified ("3 units expired: A+ ×2, O- ×1").
+- When units come within **7 days** of expiry you get one heads-up notification, and they appear on the dashboard and under **Units → Expiring**.
+- **Dispatch always issues the soonest-expiring units first** (FEFO, first-expired-first-out), so the oldest blood is used before it's wasted.
 
 ### Editing or removing a donation
 
-On **Donations**, use **Edit** to correct details. If you change the number of bags or the blood type, stock is adjusted for you.
+On **Donations**, the **Units** column shows whether a donation is *Awaiting screening* or *Screened*.
 
-You can't reduce, move or delete a donation whose bags have already been sent to hospitals. The app explains why instead of letting stock go wrong.
+- **Donor details** (name, contact, address, notes) can always be corrected with **Edit**.
+- **Blood type and number of bags** can only change **before screening**, while the units are still in quarantine.
+- **Delete** is only offered before screening.
+
+After screening, a unit is part of the stock history, so corrections are explicit: correct the blood group at screening, or **discard** a unit on the Units page with a reason.
 
 ### Blood stock page
 
-- **Totals:** bags available, collected all-time, dispatched to hospitals, and pending demand.
-- **Per-group table** with a status for each group: *Healthy*, *Low*, *Out of stock*, or *Short N* (more is pending than is available).
+- **Totals:** units available, units expiring within 7 days, units in quarantine, and units wasted (expired or discarded) in the last 30 days. Each card links to the matching unit list.
+- **Per-group table:** available, expiring soon, the next expiry date, units in quarantine, pending demand, and a status (*Healthy*, *Low*, *Out of stock*, or *Short N* when more is pending than available).
 - **Compatibility chart:** which donor groups each patient group can safely receive.
 
 ---
@@ -102,6 +134,8 @@ You can't reduce, move or delete a donation whose bags have already been sent to
    - **Emergency:** life-threatening. Blood bank staff get an emergency alert and the request goes to the top of their queue.
 7. Submit. The request shows as **Pending** until the blood bank dispatches it.
 
+**Each delivery lists the exact units sent:** open "N units · use by …" on the request card to see every unit code and its use-by date, for your transfusion records.
+
 **Always ask for what the patient needs, even if stock looks low.** If you ask for more than is in stock, a note explains that the blood bank may send a **compatible group** or a **partial amount**. Your request is never refused for stock reasons. When it's dispatched, the notification and the request card show exactly which groups and how many bags were sent.
 
 ### Confirming receipt
@@ -114,7 +148,7 @@ You can cancel your own request while it is still **Pending**. Once it has been 
 
 ### Logging a walk-in donor
 
-Use **Log a donor** on your dashboard. The donation is added to the central stock and recorded as collected by your hospital.
+Use **Log a donor** on your dashboard. The donation is recorded as collected by your hospital and goes into the blood bank's screening queue. It becomes available stock once it passes lab screening.
 
 ---
 
@@ -124,7 +158,7 @@ Open **Notifications** in the menu, or tap the bell at the top right on a phone.
 
 | You are | You're notified when |
 |---|---|
-| **Staff** | A hospital submits a request (emergencies are flagged in red), withdraws a request or confirms receipt; a hospital logs a walk-in donor; or a blood group runs low or out |
+| **Staff** | A hospital submits a request (emergencies are flagged in red), withdraws a request or confirms receipt; a hospital logs a walk-in donor; a blood group runs low or out; units are about to expire or have expired |
 | **Hospital** | Your request is dispatched (including any substitute or partial fill), recorded as received or cancelled, or the blood bank files a request for you |
 
 - Click a notification to mark it read and jump straight to the request it's about.

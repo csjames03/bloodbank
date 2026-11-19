@@ -27,6 +27,12 @@ final class Actor
         return new self($user['role'], (int) $user['id'], $user['name']);
     }
 
+    /** Automatic actions such as expiring units. */
+    public static function system(): self
+    {
+        return new self('system', 0, 'System');
+    }
+
     public function isAdmin(): bool
     {
         return $this->role === Auth::ADMIN;

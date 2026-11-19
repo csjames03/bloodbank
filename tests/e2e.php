@@ -146,9 +146,53 @@ function db(): Database
     return Database::instance();
 }
 
+/** Usable stock: available, unexpired units of a group. */
 function stock(string $code): int
 {
-    return (int) db()->value('SELECT bags FROM blood_types WHERE code = ?', [$code]);
+    return (int) db()->value(
+        "SELECT COUNT(*) FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+         WHERE bt.code = ? AND u.status = 'available' AND u.expires_at > now()",
+        [$code],
+    );
+}
+
+function quarantined(string $code): int
+{
+    return (int) db()->value(
+        "SELECT COUNT(*) FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id WHERE bt.code = ? AND u.status = 'quarantine'",
+        [$code],
+    );
+}
+
+/**
+ * Test helper: temporarily limit a group's usable stock to `$keep` units by
+ * parking the rest (the ones expiring last). restoreStock() puts them back.
+ * Real operations only ever touch the visible units, so integrity holds.
+ */
+function limitStock(string $code, int $keep): void
+{
+    db()->run(
+        "UPDATE blood_units SET status = 'quarantine', discard_reason = '__parked__'
+         WHERE id IN (SELECT u.id FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+                      WHERE bt.code = ? AND u.status = 'available' AND u.expires_at > now()
+                      ORDER BY u.expires_at, u.id OFFSET ?)",
+        [$code, $keep],
+    );
+}
+
+function restoreStock(): void
+{
+    db()->run("UPDATE blood_units SET status = 'available', discard_reason = NULL WHERE discard_reason = '__parked__'");
+}
+
+/** Pass every donation still in quarantine (as the lab would), so its units become stock. */
+function screenAll(Browser $staff): void
+{
+    foreach (db()->all("SELECT DISTINCT dn.id, bt.code FROM blood_units u JOIN donations dn ON dn.id = u.donation_id
+                        JOIN blood_types bt ON bt.id = dn.blood_type_id
+                        WHERE u.status = 'quarantine' AND u.discard_reason IS DISTINCT FROM '__parked__'") as $d) {
+        $staff->post("/screening/{$d['id']}/pass", ['confirmed_group' => $d['code']]);
+    }
 }
 
 function noErrors(Browser $b): bool
@@ -197,24 +241,26 @@ $h->get('/donations');
 check('Hospital cannot open donation records (403)', $h->status === 403);
 
 $h->get('/');
-$pendingBefore = (int) db()->value("SELECT COUNT(*) FROM blood_requests WHERE status = 'pending'");
+$aPosStart = stock('A+');
 $h->post('/requests', ['doctor_name' => 'Jane Cruz', 'blood_type' => 'A+', 'bags' => '2']);
 $newId = (int) db()->value('SELECT MAX(id) FROM blood_requests');
 $row = db()->one('SELECT * FROM blood_requests WHERE id = ?', [$newId]);
 check('Hospital submits a request', str_contains($h->toast(), 'submitted') && $row['status'] === 'pending');
 check('“Dr.” prefix is added to the doctor name', $row['doctor_name'] === 'Dr. Jane Cruz');
 check('Request is tied to the signed-in hospital', (int) $row['hospital_id'] === (int) db()->value("SELECT id FROM hospitals WHERE username='riverside'"));
-check('Submitting a request does not touch stock', stock('A+') === 14);
+check('Submitting a request does not touch stock', stock('A+') === $aPosStart);
 
 check('Priority defaults to routine', $row['priority'] === 'routine' && $row['needed_by'] === null);
 
 // Demand above stock is accepted — the blood bank decides how to fill it.
+$abNegStart = stock('AB-');
+$bigBags = $abNegStart + 2;
 $neededBy = (new DateTimeImmutable('+3 hours'))->format('Y-m-d\TH:i');
-$h->post('/requests', ['doctor_name' => 'Jane Cruz', 'blood_type' => 'AB-', 'bags' => '4', 'priority' => 'emergency', 'needed_by' => $neededBy]);
+$h->post('/requests', ['doctor_name' => 'Jane Cruz', 'blood_type' => 'AB-', 'bags' => (string) $bigBags, 'priority' => 'emergency', 'needed_by' => $neededBy]);
 $bigId = (int) db()->value('SELECT MAX(id) FROM blood_requests');
 $big = db()->one('SELECT * FROM blood_requests WHERE id = ?', [$bigId]);
-check('Request larger than stock is accepted', $bigId > $newId && $big['status'] === 'pending' && stock('AB-') === 3, $h->toast());
-check('…with a heads-up that it may be substituted or partly filled', str_contains($h->toast(), 'Only 3 bags of AB-') && str_contains($h->toast(), 'compatible group'), $h->toast());
+check('Request larger than stock is accepted', $bigId > $newId && $big['status'] === 'pending' && stock('AB-') === $abNegStart, $h->toast());
+check('…with a heads-up that it may be substituted or partly filled', str_contains($h->toast(), "Only {$abNegStart} bags of AB-") && str_contains($h->toast(), 'compatible group'), $h->toast());
 check('Priority and “needed by” are stored', $big['priority'] === 'emergency' && substr((new DateTimeImmutable($big['needed_by']))->format('Y-m-d\TH:i'), 0, 16) === $neededBy);
 
 $h->get('/');
@@ -250,11 +296,14 @@ $h->post('/requests', ['doctor_name' => 'X', 'blood_type' => 'A+', 'bags' => '1'
 check('POST without CSRF token is rejected', (int) db()->value('SELECT COUNT(*) FROM blood_requests') === $before && str_contains($h->toast(), 'session expired'));
 
 $h->get('/');
+$oNegStart = stock('O-');
+$oNegQuarantine = quarantined('O-');
 $h->post('/donations', [
     'first_name' => 'Walk', 'middle_name' => '', 'last_name' => 'In', 'sex' => 'Male', 'age' => '30',
     'contact' => '0917 000 0000', 'address' => 'Angeles City', 'blood_type' => 'O-', 'bags' => '1', 'medical_status' => '',
 ]);
-check('Hospital logs a walk-in donation (stock +1)', stock('O-') === 9 && str_contains($h->toast(), 'Donation recorded'));
+check('Hospital logs a walk-in donation', str_contains($h->toast(), 'Donation recorded') && str_contains($h->toast(), 'quarantine'), $h->toast());
+check('…its unit is quarantined, not stock, until screening', stock('O-') === $oNegStart && quarantined('O-') === $oNegQuarantine + 1);
 check('Walk-in donation records the collecting hospital', db()->value("SELECT h.username FROM donations d JOIN hospitals h ON h.id = d.hospital_id ORDER BY d.id DESC LIMIT 1") === 'riverside');
 
 $h->get('/requests');
@@ -281,7 +330,8 @@ check('Hospital credentials do not work on the staff portal', str_contains($a->b
 $a->post('/admin/login', ['username' => 'admin', 'password' => 'admin123']);
 check('Admin signs in', noErrors($a) && str_contains($a->body, 'Stock by blood group'));
 
-foreach (['/', '/requests', '/requests?status=pending', '/requests?type=A%2B&q=co', '/donations', '/donations?q=maria', '/donations?type=O-', '/donations?page=2', '/stocks'] as $page) {
+foreach (['/', '/requests', '/requests?status=pending', '/requests?type=A%2B&q=co', '/donations', '/donations?q=maria', '/donations?type=O-', '/donations?page=2', '/stocks',
+          '/screening', '/units', '/units?status=expiring', '/units?status=dispatched&type=O%2B', '/units?q=LL0000', '/activity'] as $page) {
     $a->get($page);
     check("Admin page {$page} renders cleanly", noErrors($a), "HTTP {$a->status}");
 }
@@ -301,6 +351,10 @@ check(
 check('Pending requests offer “Allocate & dispatch” with a suggestion', str_contains($a->body, 'data-allocate=') && str_contains($a->body, 'name="alloc[A+]" value="2"'));
 
 $aPlus = stock('A+');
+$fefo = array_map('intval', array_column(db()->all(
+    "SELECT u.id FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+     WHERE bt.code = 'A+' AND u.status = 'available' AND u.expires_at > now() ORDER BY u.expires_at, u.id LIMIT 2"
+), 'id'));
 $a->post("/requests/{$otherId}/approve");
 $req = db()->one('SELECT * FROM blood_requests WHERE id = ?', [$otherId]);
 check('Approving dispatches the request', $req['status'] === 'in_transit' && $req['approved_at'] !== null);
@@ -310,6 +364,8 @@ $a->post("/requests/{$otherId}/approve");
 check('A request cannot be approved twice', stock('A+') === $aPlus - (int) $req['bags'] && str_contains($a->toast(), 'already in transit'));
 
 check('Approval records what was sent', db()->value('SELECT bags FROM request_allocations WHERE request_id = ?', [$otherId]) == $req['bags']);
+$issued = array_map('intval', array_column(db()->all('SELECT id FROM blood_units WHERE request_id = ? ORDER BY expires_at, id', [$otherId]), 'id'));
+check('Dispatch issues the soonest-expiring units first (FEFO)', $issued === $fefo, json_encode([$issued, $fefo]));
 
 $a->post("/requests/{$otherId}/receive");
 check('Staff can record receipt on the hospital’s behalf', db()->value('SELECT status FROM blood_requests WHERE id = ?', [$otherId]) === 'completed');
@@ -325,18 +381,19 @@ $bPlus = stock('B+');
 $transitBags = (int) db()->value('SELECT bags FROM blood_requests WHERE id = ?', [$transitId]);
 $a->post("/requests/{$transitId}/cancel");
 check('Cancelling an in-transit request returns its bags to stock', stock('B+') === $bPlus + $transitBags, $a->toast());
+check('…and the recalled units are no longer linked to it', (int) db()->value('SELECT COUNT(*) FROM blood_units WHERE request_id = ?', [$transitId]) === 0);
 
 // Allocation: what staff send is validated against compatibility, stock and the amount requested.
 $snapshot = static fn () => [stock('AB-'), stock('A-'), stock('O-'), stock('A+')];
 $before = $snapshot();
 $a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => '1', 'A+' => '1']]);
 check('Incompatible groups cannot be allocated (A+ to an AB- patient)', $snapshot() === $before && str_contains($a->toast(), 'not compatible'), $a->toast());
-$a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => '3', 'O-' => '2']]);
-check('Cannot send more bags than requested', $snapshot() === $before && str_contains($a->toast(), 'only 4 were requested'), $a->toast());
+$a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => (string) ($bigBags - 1), 'O-' => '2']]);
+check('Cannot send more bags than requested', $snapshot() === $before && str_contains($a->toast(), "only {$bigBags} were requested"), $a->toast());
 $a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => '-1']]);
 check('Negative allocations are rejected', $snapshot() === $before && db()->value('SELECT status FROM blood_requests WHERE id = ?', [$bigId]) === 'pending');
-$a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => '4']]);
-check('Cannot allocate more than is in stock (only 3 AB-)', $snapshot() === $before && str_contains($a->toast(), 'Not enough AB-'), $a->toast());
+$a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => (string) ($before[0] + 1)]]);
+check('Cannot allocate more units than are in stock', $snapshot() === $before && str_contains($a->toast(), 'Not enough AB-'), $a->toast());
 
 [$abNeg0, $aNeg0, $oNeg0] = $before;
 $a->post("/requests/{$bigId}/approve", ['alloc' => ['AB-' => '2', 'A-' => '1', 'O-' => '1']]);
@@ -349,6 +406,7 @@ check(
 check('…and the split is stored per group', (int) db()->value('SELECT COUNT(*) FROM request_allocations WHERE request_id = ?', [$bigId]) === 3);
 $a->get('/requests?status=in_transit');
 check('Card shows what was sent and who dispatched it', str_contains($a->body, 'compatible substitute') && str_contains($a->body, 'by Administrator'));
+check('Card lists the issued unit codes for traceability', str_contains($a->body, 'class="unit-trace"') && (bool) preg_match('/LL\d{6}/', $a->body));
 
 $a->post("/requests/{$bigId}/cancel");
 check(
@@ -371,7 +429,7 @@ check(
 
 // With no allocation given (no JavaScript), the suggested split is used.
 $abPending = (int) db()->value("SELECT r.id FROM blood_requests r JOIN blood_types bt ON bt.id = r.blood_type_id WHERE bt.code = 'AB+' AND r.status = 'pending'");
-db()->run("UPDATE blood_types SET bags = 0 WHERE code = 'AB+'");
+limitStock('AB+', 0);
 $a->post("/requests/{$abPending}/approve", ['alloc' => ['AB+' => '1']]);
 check('Approval is refused when the chosen group has run out', db()->value('SELECT status FROM blood_requests WHERE id = ?', [$abPending]) === 'pending' && stock('AB+') === 0, $a->toast());
 $a->post("/requests/{$abPending}/approve");
@@ -382,7 +440,7 @@ check(
     $a->toast(),
 );
 check('…but never reaches for O- while other groups have stock', db()->value('SELECT bt.code FROM request_allocations a JOIN blood_types bt ON bt.id = a.blood_type_id WHERE a.request_id = ?', [$abPending]) !== 'O-');
-db()->run("UPDATE blood_types SET bags = 6 WHERE code = 'AB+'");
+restoreStock();
 
 $a->get('/requests');
 $a->post('/requests', ['hospital_id' => '999', 'doctor_name' => 'Who', 'blood_type' => 'O+', 'bags' => '1']);
@@ -397,13 +455,20 @@ section('Admin — donations');
 
 $a->get('/donations');
 $oNeg = stock('O-');
+$oNegQ = quarantined('O-');
 $donor = [
     'first_name' => 'Test', 'middle_name' => 'Q', 'last_name' => 'Donor', 'sex' => 'Female', 'age' => '29',
     'contact' => '09170001111', 'address' => 'Clark', 'blood_type' => 'O-', 'bags' => '1', 'medical_status' => 'Fit',
 ];
 $a->post('/donations', $donor);
 $donationId = (int) db()->value('SELECT MAX(id) FROM donations');
-check('Recording a donation adds stock', stock('O-') === $oNeg + 1);
+check('Recording a donation creates one quarantined unit per bag', quarantined('O-') === $oNegQ + 1 && stock('O-') === $oNeg);
+$unit = db()->one('SELECT * FROM blood_units WHERE donation_id = ?', [$donationId]);
+check(
+    'Each unit gets a code and an expiry date one shelf life after collection',
+    (bool) preg_match('/^LL\d{6}$/', $unit['unit_code'])
+        && (new DateTimeImmutable($unit['expires_at']))->getTimestamp() - (new DateTimeImmutable($unit['collected_at']))->getTimestamp() === 35 * 86400,
+);
 
 $a->post('/donations', [...$donor, 'age' => '12', 'contact' => 'abc']);
 check('Underage donor / bad contact is rejected', (int) db()->value('SELECT MAX(id) FROM donations') === $donationId && str_contains($a->body, 'between 16 and 65'));
@@ -411,24 +476,123 @@ check('…and the form keeps what was typed', str_contains($a->body, 'value="Tes
 
 $a->get('/donations');
 $a->post("/donations/{$donationId}", [...$donor, '_id' => $donationId, 'bags' => '2', 'first_name' => 'Tess']);
-check('Editing bags adjusts stock by the difference', stock('O-') === $oNeg + 2);
+check('Before screening, bags can be corrected (units follow)', (int) db()->value('SELECT COUNT(*) FROM blood_units WHERE donation_id = ?', [$donationId]) === 2 && quarantined('O-') === $oNegQ + 2);
 check('Editing updates donor details', db()->value('SELECT d.first_name FROM donors d JOIN donations dn ON dn.donor_id = d.id WHERE dn.id = ?', [$donationId]) === 'Tess');
 
 $abNeg = stock('AB-');
+$abNegQ = quarantined('AB-');
 $a->post("/donations/{$donationId}", [...$donor, '_id' => $donationId, 'bags' => '2', 'blood_type' => 'AB-']);
-check('Changing blood type moves the bags between groups', stock('O-') === $oNeg && stock('AB-') === $abNeg + 2);
+check('Before screening, the blood type can be corrected', quarantined('O-') === $oNegQ && quarantined('AB-') === $abNegQ + 2 && stock('AB-') === $abNeg);
 
-db()->run("UPDATE blood_types SET bags = 1 WHERE code = 'AB-'");
-$a->post("/donations/{$donationId}/delete");
-check('Cannot delete a donation whose bags were already dispatched', (int) db()->value('SELECT COUNT(*) FROM donations WHERE id = ?', [$donationId]) === 1 && str_contains($a->toast(), 'already been dispatched'));
-db()->run("UPDATE blood_types SET bags = ? WHERE code = 'AB-'", [$abNeg + 2]);
+/* ------------------------------------------------------------------------- */
+section('Screening');
 
+$a->get('/screening');
+check('Screening queue lists the quarantined donation with its unit codes', noErrors($a) && str_contains($a->body, 'id="donation-' . $donationId . '"') && str_contains($a->body, 'Test Q Donor'));
+
+$a->post("/screening/{$donationId}/pass", ['confirmed_group' => 'AB-']);
+check('Passing screening releases the units to stock', stock('AB-') === $abNeg + 2 && quarantined('AB-') === $abNegQ, $a->toast());
+check('…and records when they were screened', (int) db()->value('SELECT COUNT(*) FROM blood_units WHERE donation_id = ? AND screened_at IS NOT NULL', [$donationId]) === 2);
+$a->post("/screening/{$donationId}/pass", ['confirmed_group' => 'AB-']);
+check('A donation cannot be screened twice', stock('AB-') === $abNeg + 2 && str_contains($a->toast(), 'already been screened'));
+
+$a->get('/donations');
+$a->post("/donations/{$donationId}", [...$donor, '_id' => $donationId, 'bags' => '1', 'blood_type' => 'AB-', 'first_name' => 'Tess']);
+check('After screening, bags can no longer be edited', (int) db()->value('SELECT bags FROM donations WHERE id = ?', [$donationId]) === 2 && stock('AB-') === $abNeg + 2 && str_contains($a->toast(), 'already been screened'), $a->toast());
+$a->post("/donations/{$donationId}", [...$donor, '_id' => $donationId, 'bags' => '2', 'blood_type' => 'AB-', 'address' => 'Clark Freeport Zone', 'first_name' => 'Tess']);
+check('…but donor details still can', db()->value('SELECT d.address FROM donors d JOIN donations dn ON dn.donor_id = d.id WHERE dn.id = ?', [$donationId]) === 'Clark Freeport Zone');
 $a->post("/donations/{$donationId}/delete");
-check('Deleting a donation removes its bags from stock', stock('AB-') === $abNeg && (int) db()->value('SELECT COUNT(*) FROM donations WHERE id = ?', [$donationId]) === 0);
-check('Donor without donations is cleaned up', (int) db()->value("SELECT COUNT(*) FROM donors WHERE first_name = 'Tess' AND last_name = 'Donor'") === 0);
+check('A screened donation cannot be deleted', (int) db()->value('SELECT COUNT(*) FROM donations WHERE id = ?', [$donationId]) === 1 && str_contains($a->toast(), 'discard the unit'), $a->toast());
+
+// Re-grouping at screening.
+$a->post('/donations', [...$donor, 'first_name' => 'Regroup', 'contact' => '09170002222', 'blood_type' => 'A+', 'bags' => '1']);
+$regroupId = (int) db()->value('SELECT MAX(id) FROM donations');
+$bPos = stock('B+');
+$a->post("/screening/{$regroupId}/pass", ['confirmed_group' => 'B+']);
+check(
+    'The lab can correct the blood group at screening (donation, units and donor re-grouped)',
+    stock('B+') === $bPos + 1
+        && db()->value('SELECT bt.code FROM donations dn JOIN blood_types bt ON bt.id = dn.blood_type_id WHERE dn.id = ?', [$regroupId]) === 'B+'
+        && db()->value('SELECT bt.code FROM donors d JOIN donations dn ON dn.donor_id = d.id JOIN blood_types bt ON bt.id = d.blood_type_id WHERE dn.id = ?', [$regroupId]) === 'B+',
+    $a->toast(),
+);
+
+// Failing screening.
+$a->post('/donations', [...$donor, 'first_name' => 'Reactive', 'contact' => '09170003333', 'blood_type' => 'O+', 'bags' => '2']);
+$failId = (int) db()->value('SELECT MAX(id) FROM donations');
+$oPosBefore = stock('O+');
+$a->post("/screening/{$failId}/fail", ['reason' => 'hcv']);
+check('Failing screening discards every unit with the reason', (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE donation_id = ? AND status = 'discarded' AND discard_reason LIKE 'Failed screening: Hepatitis C%'", [$failId]) === 2 && stock('O+') === $oPosBefore);
+check('…and permanently defers the donor for hepatitis C', db()->value('SELECT d.deferred_permanently FROM donors d JOIN donations dn ON dn.donor_id = d.id WHERE dn.id = ?', [$failId]) === true);
+db()->run("UPDATE donations SET donated_at = donated_at - INTERVAL '120 days' WHERE id = ?", [$failId]);
+$a->post('/donations', [...$donor, 'first_name' => 'Reactive', 'contact' => '0917 000 3333', 'blood_type' => 'O+', 'bags' => '1']);
+check('A permanently deferred donor is refused', (int) db()->value('SELECT MAX(id) FROM donations') === $failId && str_contains($a->toast(), 'permanently deferred'), $a->toast());
+$a->post("/screening/{$failId}/fail", ['reason' => 'nonsense']);
+check('An unknown failure reason is rejected', str_contains($a->toast(), 'Choose why'));
+
+// Deleting before screening.
+$a->post('/donations', [...$donor, 'first_name' => 'Oops', 'contact' => '09170004444', 'blood_type' => 'A-', 'bags' => '1']);
+$oopsId = (int) db()->value('SELECT MAX(id) FROM donations');
+$a->post("/donations/{$oopsId}/delete");
+check('A donation still in quarantine can be deleted, with its units', (int) db()->value('SELECT COUNT(*) FROM donations WHERE id = ?', [$oopsId]) === 0
+    && (int) db()->value('SELECT COUNT(*) FROM blood_units WHERE donation_id = ?', [$oopsId]) === 0);
+check('Donor without donations is cleaned up', (int) db()->value("SELECT COUNT(*) FROM donors WHERE first_name = 'Oops'") === 0);
 
 $a->post('/donations/999999', [...$donor, '_id' => 999999]);
 check('Editing a missing donation shows an error', str_contains($a->toast(), 'not found'), $a->toast());
+
+$h2 = new Browser($base);
+$h2->get('/login');
+$h2->post('/login', ['username' => 'riverside', 'password' => 'hospital123']);
+$h2->get('/screening');
+check('Hospitals cannot open the screening queue (403)', $h2->status === 403);
+$h2->get('/units');
+check('Hospitals cannot open the unit list (403)', $h2->status === 403);
+
+/* ------------------------------------------------------------------------- */
+section('Units, discards & expiry');
+
+$victim = db()->one("SELECT u.id, bt.code FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+                     WHERE u.status = 'available' AND u.expires_at > now() AND bt.code = 'A+' ORDER BY u.id LIMIT 1");
+$aPosBefore = stock('A+');
+$a->get('/units');
+$a->post("/units/{$victim['id']}/discard", ['reason' => 'cold_chain', 'note' => 'Fridge 2 alarm']);
+check('Staff can discard a unit with a reason', db()->value('SELECT status FROM blood_units WHERE id = ?', [$victim['id']]) === 'discarded' && stock('A+') === $aPosBefore - 1, $a->toast());
+check('…the reason and note are kept', str_contains((string) db()->value('SELECT discard_reason FROM blood_units WHERE id = ?', [$victim['id']]), 'Cold-chain breach (temperature) — Fridge 2 alarm'));
+check('…and the discard is in the audit log', (int) db()->value("SELECT COUNT(*) FROM activity_log WHERE subject = 'unit' AND subject_id = ? AND action = 'discarded'", [$victim['id']]) === 1);
+$a->post("/units/{$victim['id']}/discard", ['reason' => 'damaged']);
+check('A discarded unit cannot be discarded again', str_contains($a->toast(), 'cannot be discarded'));
+$dispatched = (int) db()->value("SELECT id FROM blood_units WHERE status = 'dispatched' LIMIT 1");
+$a->post("/units/{$dispatched}/discard", ['reason' => 'damaged']);
+check('A dispatched unit cannot be discarded', db()->value('SELECT status FROM blood_units WHERE id = ?', [$dispatched]) === 'dispatched');
+$a->post("/units/{$victim['id']}/discard", ['reason' => '']);
+check('A discard needs a reason', str_contains($a->toast(), 'Choose why'));
+
+// Expiry: make two available units go out of date, then load any page.
+$expiring = array_map('intval', array_column(db()->all("SELECT u.id FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+    WHERE u.status = 'available' AND u.expires_at > now() AND bt.code = 'O+' ORDER BY u.expires_at LIMIT 2"), 'id'));
+$oPosBefore = stock('O+');
+db()->run("UPDATE blood_units SET expires_at = now() - INTERVAL '1 minute', collected_at = now() - INTERVAL '36 days' WHERE id = ANY (?::int[])", ['{' . implode(',', $expiring) . '}']);
+check('An out-of-date unit never counts as stock, even before the sweep', stock('O+') === $oPosBefore - 2);
+$a->get('/');
+check('The sweep marks out-of-date units as expired', (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE id = ANY (?::int[]) AND status = 'expired'", ['{' . implode(',', $expiring) . '}']) === 2);
+check('…and alerts staff', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'units_expired' AND title = '2 units expired'") >= 1);
+check('Expired units are logged by the system', (int) db()->value("SELECT COUNT(*) FROM activity_log WHERE subject = 'unit' AND action = 'expired' AND actor_role = 'system'") >= 1);
+$a->get('/');
+check('The sweep handles each unit once (no duplicate alerts)', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'units_expired' AND title = '2 units expired'") === 1);
+
+$warnedBefore = (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'units_expiring'");
+$soon = (int) db()->value("SELECT u.id FROM blood_units u JOIN blood_types bt ON bt.id = u.blood_type_id
+    WHERE u.status = 'available' AND u.expiry_warned_at IS NULL AND u.expires_at > now() + INTERVAL '8 days' AND bt.code = 'A-' LIMIT 1");
+db()->run("UPDATE blood_units SET expires_at = now() + INTERVAL '3 days', collected_at = now() - INTERVAL '32 days' WHERE id = ?", [$soon]);
+$a->get('/units?status=expiring');
+check('Units entering the 7-day window raise an “expiring” alert', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'units_expiring'") === $warnedBefore + 1
+    && db()->value('SELECT expiry_warned_at FROM blood_units WHERE id = ?', [$soon]) !== null);
+check('The expiring filter lists it', str_contains($a->body, (string) db()->value('SELECT unit_code FROM blood_units WHERE id = ?', [$soon])));
+$a->get('/stocks');
+check('Stock page shows expiring, quarantine and waste figures', noErrors($a) && str_contains($a->body, 'Expiring ≤ 7 days') && str_contains($a->body, 'In quarantine') && str_contains($a->body, 'Wasted (30 days)'));
+$a->get('/');
+check('Dashboard lists units expiring soon', str_contains($a->body, 'Expiring within 7 days'));
 
 /* ------------------------------------------------------------------------- */
 section('Returning donors');
@@ -454,11 +618,11 @@ check(
 check('…and cannot donate again before the interval is up', (int) db()->value('SELECT COUNT(*) FROM donations') === $donationCount && str_contains($a->toast(), 'can give again from'));
 
 db()->run("UPDATE donations SET donated_at = donated_at - INTERVAL '60 days' WHERE donor_id = ?", [$maria['id']]);
-$aPos = stock('A+');
+$aPosQ = quarantined('A+');
 $a->post('/donations', $mariaForm);
 check('Once eligible, the donation is added to the existing donor', (int) db()->value('SELECT COUNT(*) FROM donors') === $donorCount
     && (int) db()->value('SELECT COUNT(*) FROM donations WHERE donor_id = ?', [$maria['id']]) === (int) $maria['n'] + 1);
-check('…stock goes up and the donor is welcomed back', stock('A+') === $aPos + 1 && str_contains($a->toast(), 'Welcome back, maria') && str_contains($a->toast(), 'donation #' . ((int) $maria['n'] + 1)), $a->toast());
+check('…its unit goes to screening and the donor is welcomed back', quarantined('A+') === $aPosQ + 1 && str_contains($a->toast(), 'Welcome back, maria') && str_contains($a->toast(), 'donation #' . ((int) $maria['n'] + 1)), $a->toast());
 
 /* ------------------------------------------------------------------------- */
 section('Receipt & audit trail');
@@ -538,18 +702,18 @@ check(
 // Crossing the low-stock threshold alerts staff once.
 $bNegPending = (int) db()->value("SELECT r.id FROM blood_requests r JOIN blood_types bt ON bt.id = r.blood_type_id WHERE bt.code = 'B-' AND r.status = 'pending'");
 $bNeg = stock('B-');
-db()->run("UPDATE blood_types SET bags = 6 WHERE code = 'B-'");
+limitStock('B-', (int) config('inventory.low_stock_threshold') + 1);
 $lowBefore = (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title LIKE 'B-%'");
 $a->post("/requests/{$bNegPending}/approve");
 check('Stock dropping to the low threshold alerts staff', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title LIKE 'B-%'") === $lowBefore + 1);
-db()->run("UPDATE blood_types SET bags = ? WHERE code = 'B-'", [$bNeg - 1]);
+restoreStock();
 
 $oPos = stock('O+');
 $oPosPending = (int) db()->value("SELECT id FROM blood_requests WHERE doctor_name = 'Dr. Lee'");
-db()->run("UPDATE blood_types SET bags = 1 WHERE code = 'O+'");
+limitStock('O+', 1);
 $a->post("/requests/{$oPosPending}/approve");
 check('Stock running out alerts staff', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_out' AND title LIKE 'O+%'") === 1);
-db()->run("UPDATE blood_types SET bags = ? WHERE code = 'O+'", [$oPos - 1]);
+restoreStock();
 
 // Inbox UI.
 $a->get('/notifications');
@@ -592,13 +756,44 @@ check('Guests cannot poll notifications', str_ends_with($g->url, '/login'));
 /* ------------------------------------------------------------------------- */
 section('Integrity');
 
-$drift = db()->value(
-    "SELECT COUNT(*) FROM blood_types bt
-     WHERE bt.bags <> COALESCE((SELECT SUM(bags) FROM donations WHERE blood_type_id = bt.id), 0)
-                    - COALESCE((SELECT SUM(a.bags) FROM request_allocations a JOIN blood_requests r ON r.id = a.request_id
-                                WHERE a.blood_type_id = bt.id AND r.status IN ('in_transit','completed')), 0)"
+// Concurrency: a unit locked by another in-flight dispatch is skipped, never issued twice.
+$cfg = Config::get('db');
+$other = new PDO(sprintf('pgsql:host=%s;port=%d;dbname=%s', $cfg['host'], $cfg['port'], $cfg['database']), $cfg['username'], $cfg['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$oPosType = (int) db()->value("SELECT id FROM blood_types WHERE code = 'O+'");
+$other->beginTransaction();
+$lockedByOther = (int) $other->query("SELECT id FROM blood_units WHERE blood_type_id = {$oPosType} AND status = 'available' AND expires_at > now() ORDER BY expires_at, id LIMIT 1 FOR UPDATE")->fetchColumn();
+$picked = db()->transaction(static fn () => (new App\Repositories\UnitRepository(db()))->pickFefo($oPosType, 1));
+$other->rollBack();
+check('Concurrent dispatches never pick the same unit (locked rows are skipped)', $picked !== [] && $picked[0] !== $lockedByOther, json_encode([$picked, $lockedByOther]));
+
+check('No test-parked units are left behind', (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE discard_reason = '__parked__'") === 0);
+check(
+    'Every dispatched unit belongs to an in-transit or received request',
+    (int) db()->value("SELECT COUNT(*) FROM blood_units u LEFT JOIN blood_requests r ON r.id = u.request_id
+                       WHERE u.status = 'dispatched' AND (r.id IS NULL OR r.status NOT IN ('in_transit', 'completed'))") === 0,
 );
-check('Stock equals donations minus bags actually sent, for every group', (int) $drift === 0);
+check(
+    'Units issued per request and group match the recorded allocation exactly',
+    (int) db()->value("SELECT COUNT(*) FROM request_allocations a JOIN blood_requests r ON r.id = a.request_id
+                       WHERE r.status IN ('in_transit', 'completed')
+                         AND a.bags <> (SELECT COUNT(*) FROM blood_units u WHERE u.request_id = a.request_id AND u.blood_type_id = a.blood_type_id)") === 0,
+);
+check(
+    'Every donation has exactly one unit per bag',
+    (int) db()->value('SELECT COUNT(*) FROM donations dn WHERE dn.bags <> (SELECT COUNT(*) FROM blood_units u WHERE u.donation_id = dn.id)') === 0,
+);
+check(
+    'No unit reached stock or a hospital without being screened',
+    (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE status IN ('available', 'dispatched') AND screened_at IS NULL") === 0,
+);
+check(
+    'No out-of-date unit is still marked available',
+    (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE status = 'available' AND expires_at <= now()") === 0,
+);
+check(
+    'Every discarded unit has a reason',
+    (int) db()->value("SELECT COUNT(*) FROM blood_units WHERE status = 'discarded' AND COALESCE(discard_reason, '') = ''") === 0,
+);
 check(
     'No dispatched request is missing its allocation',
     (int) db()->value("SELECT COUNT(*) FROM blood_requests r WHERE r.status IN ('in_transit','completed')

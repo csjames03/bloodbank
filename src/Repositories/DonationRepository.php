@@ -17,7 +17,10 @@ final class DonationRepository extends Repository
                d.first_name, d.middle_name, d.last_name, d.sex, d.age,
                d.contact, d.address, d.medical_status,
                concat_ws(' ', d.first_name, d.middle_name, d.last_name) AS donor_name,
-               h.name AS hospital_name
+               h.name AS hospital_name,
+               (SELECT COUNT(*) FROM blood_units WHERE donation_id = dn.id AND status = 'quarantine') AS quarantined,
+               (SELECT COUNT(*) FROM blood_units WHERE donation_id = dn.id AND status <> 'quarantine') AS screened,
+               (SELECT string_agg(DISTINCT status, ',') FROM blood_units WHERE donation_id = dn.id) AS unit_statuses
         FROM donations dn
         JOIN donors d      ON d.id = dn.donor_id
         JOIN blood_types bt ON bt.id = dn.blood_type_id
@@ -77,6 +80,7 @@ final class DonationRepository extends Repository
     {
         return $this->db->one(
             "SELECT d.id, d.blood_type_id, bt.code AS blood_type,
+                    d.deferred_until, d.deferred_permanently, d.deferral_reason,
                     concat_ws(' ', d.first_name, d.last_name) AS name,
                     (SELECT MAX(donated_at) FROM donations WHERE donor_id = d.id) AS last_donated_at,
                     (SELECT COUNT(*) FROM donations WHERE donor_id = d.id) AS donations
@@ -86,6 +90,17 @@ final class DonationRepository extends Repository
                AND regexp_replace(d.contact, '\\D', '', 'g') = regexp_replace(?, '\\D', '', 'g')
              ORDER BY d.id LIMIT 1",
             [trim($firstName), trim($lastName), $contact],
+        );
+    }
+
+    /** Stop a donor giving blood again, permanently or until a date. */
+    public function deferDonor(int $donorId, string $reason, bool $permanent, ?\DateTimeImmutable $until): void
+    {
+        $this->db->run(
+            'UPDATE donors SET deferred_permanently = deferred_permanently OR ?, deferral_reason = ?,
+                    deferred_until = GREATEST(deferred_until, ?::timestamptz), updated_at = now()
+             WHERE id = ?',
+            [$permanent ? 'true' : 'false', $reason, $until?->format(DATE_ATOM), $donorId],
         );
     }
 

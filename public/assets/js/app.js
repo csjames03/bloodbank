@@ -337,7 +337,8 @@
                 code.textContent = opt.code;
                 const info = document.createElement('span');
                 info.className = 'alloc-info';
-                info.textContent = `${opt.stock} in stock` + (opt.exact ? ' · requested group' : ' · compatible');
+                info.textContent = `${opt.stock} in stock` + (opt.exact ? ' · requested group' : ' · compatible') +
+                    (opt.expiry ? ` · ${opt.expiry}` : '');
                 const input = document.createElement('input');
                 input.className = 'input';
                 input.type = 'number';

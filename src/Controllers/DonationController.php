@@ -48,7 +48,7 @@ final class DonationController
         }
 
         flash('success', sprintf(
-            'Donation recorded — %s of %s added to stock. %s',
+            'Donation recorded — %s of %s held in quarantine until screening. %s',
             plural($data['bags'], 'bag'),
             $data['blood_type'],
             $result['returning']
@@ -76,7 +76,7 @@ final class DonationController
     {
         try {
             (new DonationService())->delete($id, Actor::current());
-            flash('success', 'Donation removed and stock adjusted.');
+            flash('success', 'Donation deleted before screening.');
         } catch (DomainException $e) {
             flash('error', $e->getMessage());
         }

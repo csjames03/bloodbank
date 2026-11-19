@@ -27,12 +27,14 @@ $overdue = $status->isOpen() && $r['needed_by'] && new DateTimeImmutable($r['nee
 $allocateData = null;
 if ($admin && $status === RequestStatus::Pending) {
     $stockMap = is_array($stock ?? null) ? $stock : [];
+    $expiryMap = is_array($expiry ?? null) ? $expiry : [];
     $suggested = RequestService::suggest($r, $stockMap);
     $options = array_map(static fn (BloodGroup $g) => [
         'code'      => $g->value,
         'stock'     => (int) ($stockMap[$g->value] ?? 0),
         'suggested' => $suggested[$g->value] ?? 0,
         'exact'     => $g->value === $r['blood_type'],
+        'expiry'    => isset($expiryMap[$g->value]) ? 'oldest ' . expiry_label($expiryMap[$g->value]) : null,
     ], BloodGroup::from($r['blood_type'])->preferredDonors($stockMap));
 
     $allocateData = [
@@ -84,6 +86,16 @@ if ($admin && $status === RequestStatus::Pending) {
                 <?php if ($sent < (int) $r['bags']): ?><span class="badge badge-warning plain">Partial <?= $sent ?>/<?= (int) $r['bags'] ?></span><?php endif; ?>
             </span>
         </div>
+        <?php if (!empty($r['units'])): ?>
+            <details class="unit-trace">
+                <summary><?= plural(count($r['units']), 'unit') ?> · use by <?= e(fmt_date($r['units'][0]['expires_at'], 'M j')) ?></summary>
+                <ul>
+                    <?php foreach ($r['units'] as $u): ?>
+                        <li><span class="mono"><?= e($u['unit_code']) ?></span> <span class="alloc-chip"><?= e($u['blood_type']) ?></span> <span class="muted">use by <?= e(fmt_date($u['expires_at'], 'M j, Y')) ?></span></li>
+                    <?php endforeach; ?>
+                </ul>
+            </details>
+        <?php endif; ?>
     <?php endif; ?>
 
     <?php if ($status === RequestStatus::Cancelled): ?>

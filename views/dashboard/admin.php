@@ -8,6 +8,9 @@
  * @var list<array<string, mixed>> $openRequests
  * @var array<string, int> $stock
  * @var list<array<string, mixed>> $hospitals
+ * @var array<string, string> $expiry   code => earliest expiry
+ * @var int $screening                  donations awaiting screening
+ * @var list<array<string, mixed>> $expiring  units expiring soon
  */
 $threshold = (int) config('inventory.low_stock_threshold');
 $low = array_filter($inventory, static fn ($i) => (int) $i['bags'] <= $threshold);
@@ -40,12 +43,33 @@ $firstName = explode(' ', auth_user()['name'])[0];
         <div class="stat-value"><?= $summary['in_transit']['count'] ?></div>
         <div class="stat-meta"><?= plural($summary['completed']['count'], 'delivery', 'deliveries') ?> completed</div>
     </a>
-    <a href="<?= e(url('/donations')) ?>" class="card stat tone-success">
-        <div class="stat-top"><span class="stat-label">Donated this month</span><span class="stat-icon"><?= icon('heart') ?></span></div>
-        <div class="stat-value"><?= $donations['month_bags'] ?></div>
-        <div class="stat-meta"><?= $donations['total_bags'] ?> bags from <?= plural($donations['donors'], 'donor') ?> all-time</div>
+    <a href="<?= e(url('/screening')) ?>" class="card stat tone-success">
+        <div class="stat-top"><span class="stat-label">Awaiting screening</span><span class="stat-icon"><?= icon('shield') ?></span></div>
+        <div class="stat-value"><?= $screening ?></div>
+        <div class="stat-meta"><?= $donations['month_bags'] ?> bags donated this month</div>
     </a>
 </section>
+
+<?php if ($expiring): ?>
+    <section class="card section expiring-card" aria-labelledby="expiring-heading">
+        <div class="card-head">
+            <div>
+                <h2 id="expiring-heading"><?= icon('clock', 'icon-sm') ?> Expiring within <?= (int) config('inventory.expiry_warning_days') ?> days</h2>
+                <p class="muted" style="font-size:13px;margin-top:2px">These units are dispatched first automatically. Offer them to hospitals before they go to waste.</p>
+            </div>
+            <a class="link" href="<?= e(url('/units', ['status' => 'expiring'])) ?>">All expiring <?= icon('arrow-right', 'icon-sm') ?></a>
+        </div>
+        <ul class="expiring-list">
+            <?php foreach ($expiring as $u): ?>
+                <li>
+                    <span class="blood-code" style="min-width:38px;height:24px;font-size:13px"><?= e($u['blood_type']) ?></span>
+                    <span class="mono"><?= e($u['unit_code']) ?></span>
+                    <span class="badge badge-<?= e(expiry_tone($u['expires_at'])) ?> plain"><?= e(expiry_label($u['expires_at'])) ?></span>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </section>
+<?php endif; ?>
 
 <section class="section" aria-labelledby="stock-heading">
     <div class="section-head">

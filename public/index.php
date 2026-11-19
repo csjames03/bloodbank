@@ -18,7 +18,20 @@ if (PHP_SAPI === 'cli-server') {
 
 require dirname(__DIR__) . '/src/bootstrap.php';
 
+use App\Core\Auth;
 use App\Core\Request;
+use App\Services\InventoryService;
+
+// Expire out-of-date units and raise expiry alerts. Cheap and idempotent,
+// so it simply runs on every signed-in request instead of needing a cron job.
+// A failure here must never take the page down.
+if (Auth::check()) {
+    try {
+        (new InventoryService())->sweep();
+    } catch (Throwable $e) {
+        error_log('Inventory sweep failed: ' . $e->getMessage());
+    }
+}
 
 /** @var App\Core\Router $router */
 $router = require BASE_PATH . '/src/routes.php';

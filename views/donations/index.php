@@ -53,6 +53,7 @@ $filtered = $filters['q'] !== '' || $filters['type'];
                     <th scope="col">Donor</th>
                     <th scope="col">Type</th>
                     <th scope="col" class="num">Bags</th>
+                    <th scope="col">Units</th>
                     <th scope="col">Donated</th>
                     <th scope="col">Medical notes</th>
                     <th scope="col"><span class="sr-only">Actions</span></th>
@@ -79,6 +80,15 @@ $filtered = $filters['q'] !== '' || $filters['type'];
                         </td>
                         <td data-label="Type"><span class="blood-code" style="min-width:40px;height:26px;font-size:13px"><?= e($d['blood_type']) ?></span></td>
                         <td data-label="Bags" class="num"><?= (int) $d['bags'] ?></td>
+                        <td data-label="Units">
+                            <?php if ((int) $d['quarantined'] > 0): ?>
+                                <a class="badge badge-warning" href="<?= e(url('/screening')) ?>#donation-<?= (int) $d['id'] ?>">Awaiting screening</a>
+                            <?php elseif (str_contains((string) $d['unit_statuses'], 'discarded') && !str_contains((string) $d['unit_statuses'], 'available') && !str_contains((string) $d['unit_statuses'], 'dispatched')): ?>
+                                <span class="badge badge-danger">Discarded</span>
+                            <?php else: ?>
+                                <span class="badge badge-success">Screened</span>
+                            <?php endif; ?>
+                        </td>
                         <td data-label="Donated">
                             <?= e(fmt_date($d['donated_at'])) ?>
                             <div class="list-sub"><?= $d['hospital_name'] ? 'via ' . e($d['hospital_name']) : 'at blood bank' ?></div>
@@ -89,12 +99,14 @@ $filtered = $filters['q'] !== '' || $filters['type'];
                                 <button type="button" class="btn btn-sm" data-edit-donation='<?= e(json_encode($payload)) ?>'>
                                     <?= icon('pencil', 'icon-sm') ?> Edit
                                 </button>
+                                <?php if ((int) $d['screened'] === 0): ?>
                                 <form method="post" action="<?= e(url("/donations/{$d['id']}/delete")) ?>"
-                                      data-confirm="Remove this donation from <?= e($d['donor_name']) ?>? <?= e(plural((int) $d['bags'], 'bag')) ?> of <?= e($d['blood_type']) ?> will be taken out of stock."
+                                      data-confirm="Delete this donation from <?= e($d['donor_name']) ?>? Its <?= e(plural((int) $d['bags'], 'unit')) ?> awaiting screening will be removed."
                                       data-confirm-label="Remove donation" data-confirm-danger>
                                     <?= csrf_field() ?>
                                     <button type="submit" class="btn btn-sm btn-danger" aria-label="Delete donation by <?= e($d['donor_name']) ?>"><?= icon('trash', 'icon-sm') ?></button>
                                 </form>
+                                <?php endif; ?>
                             </div>
                         </td>
                     </tr>

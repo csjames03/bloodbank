@@ -11,7 +11,9 @@ Built with **PHP 8.5** and **PostgreSQL**. It has no framework and no Composer o
 | Area | What it does |
 |---|---|
 | **Two portals** | Hospital sign-in (`/login`) and blood bank staff sign-in (`/admin/login`), each with its own permissions. |
-| **Live inventory** | Stock per ABO/Rh group, with low and out-of-stock flags and a coverage check against pending requests. |
+| **Unit-level inventory** | Every bag is tracked individually with a unit code and a 35-day expiry. Stock is the count of screened, unexpired units, calculated live so it can't drift. Low and out-of-stock flags, waste figures and an expiring-soon panel. |
+| **Lab screening** | New donations are quarantined until screened. Pass (confirming or correcting the blood group) releases them to stock; fail discards them and defers the donor (permanently for HIV and hepatitis). |
+| **Expiry management** | Dispatch issues the soonest-expiring units first (FEFO). An automatic sweep expires out-of-date units and alerts staff about units expiring within 7 days. Every discard needs a reason. |
 | **Triage** | Requests carry a priority (routine, urgent or emergency) and an optional "needed by" time. Staff see a queue ordered by urgency, and emergencies raise an alert. |
 | **Request lifecycle** | Pending → In transit → Received, or Cancelled. Requests are never refused for low stock. Staff **allocate** at dispatch: the patient's group, compatible substitutes or a partial fill. The **hospital confirms receipt**. |
 | **Delivery tracker** | A three-step progress view with a timestamp for each step, shown to both hospitals and staff. |
@@ -54,7 +56,7 @@ Point the virtual host's document root at `public/`. Alternatively, drop the fol
 
 ## Tests
 
-The end-to-end suite drives the running app over HTTP the way a browser does (cookies, CSRF tokens, redirects) and checks the database after every step. It has **123 checks** covering both portals, permissions, triage, allocation (substitutes, partial fills and the rules that reject bad splits), receipt, returning donors, the audit log, notifications, stock maths, validation, CSRF and the login throttle. A separate unit suite (**23 checks**, no server needed) covers the compatibility and allocation rules.
+The end-to-end suite drives the running app over HTTP the way a browser does (cookies, CSRF tokens, redirects) and checks the database after every step. It has **169 checks** covering both portals, permissions, triage, allocation (substitutes, partial fills and the rules that reject bad splits), FEFO unit issue, concurrent dispatch, screening (pass, re-group, fail, deferral), discards, the expiry sweep, receipt, returning donors, the audit log, notifications, validation, CSRF, the login throttle and a set of unit-level integrity checks. A separate unit suite (**33 checks**, no server needed) covers compatibility, allocation, screening outcomes and expiry labels.
 
 ```bash
 php -S 127.0.0.1:8000 -t public public/index.php   # terminal 1

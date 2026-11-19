@@ -8,6 +8,8 @@ use App\Controllers\DashboardController;
 use App\Controllers\DonationController;
 use App\Controllers\NotificationController;
 use App\Controllers\RequestController;
+use App\Controllers\ScreeningController;
+use App\Controllers\UnitController;
 use App\Controllers\StockController;
 use App\Core\Router;
 
@@ -39,6 +41,13 @@ $router->post('/donations/{id}/delete', [DonationController::class, 'destroy'], 
 
 // Inventory
 $router->get('/stocks', [StockController::class, 'index'], 'admin');
+
+// Lab screening and unit-level inventory
+$router->get('/screening', [ScreeningController::class, 'index'], 'admin');
+$router->post('/screening/{id}/pass', [ScreeningController::class, 'pass'], 'admin');
+$router->post('/screening/{id}/fail', [ScreeningController::class, 'fail'], 'admin');
+$router->get('/units', [UnitController::class, 'index'], 'admin');
+$router->post('/units/{id}/discard', [UnitController::class, 'discard'], 'admin');
 
 // Audit trail
 $router->get('/activity', [ActivityController::class, 'index'], 'admin');

@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.3.0 — Unit-level inventory, screening and expiry (2026-11-19)
+
+Stock is no longer a number per blood group. Every bag is tracked individually from collection to dispatch, so the stock figure reflects only blood that is screened, in date and usable.
+
+### Changed
+
+- **Stock is calculated, not stored.** `blood_types.bags` is gone. Stock is the number of units with status `available` and an expiry in the future, counted live. Nothing can drift, and a unit stops counting the moment it expires.
+- **Donations no longer go straight into stock.** Each bag becomes a quarantined unit until it passes lab screening.
+- **Dispatch issues specific units, first-expired-first-out (FEFO).** It uses `SELECT … FOR UPDATE SKIP LOCKED`, so two staff dispatching at once can never issue the same bag. Too few units in any group rolls back the whole dispatch.
+- **Recall returns the actual units:** back to stock, or marked expired if their shelf life ran out while they were out.
+- **Donation corrections are now explicit.** Blood group and bag count can change only before screening, and only an unscreened donation can be deleted. After screening, correct the group at screening or discard a unit with a reason. Donor details stay editable.
+
+### Added
+
+- **`blood_units` table:** unit code (`LL000123`), group, status (`quarantine`, `available`, `dispatched`, `discarded`, `expired`), collection and expiry dates (35-day shelf life), screening time, the request it was issued to, discard reason and expiry-warning flag.
+- **Lab screening page** (`/screening`, with a badge in the menu):
+  - Pass with the lab-confirmed group. A different group re-groups the donation, its units and the donor.
+  - Fail with a reason. Every unit is discarded and the donor deferred: HIV and hepatitis B/C permanently, syphilis and malaria for 12 months, sample problems not at all.
+- **Donor deferral:** deferred donors are refused when they come back.
+- **Units page** (`/units`): every bag with its status, dates and whereabouts. Filter by status (including "expiring within 7 days"), group or unit code. Discard requires a reason (damaged, cold-chain breach, haemolysed, clotted, labelling, other) plus an optional note.
+- **Expiry sweep:** runs automatically on every signed-in request, with no cron job needed. It expires out-of-date units and sends **"N units expired"** and **"N units expire within 7 days"** notifications, once per unit. Expiry and discards also trigger the low and out-of-stock alerts.
+- **Dashboard:** an "Expiring within 7 days" panel, and an "Awaiting screening" figure.
+- **Stock page:** available, expiring, in quarantine and wasted (last 30 days), plus per-group next-expiry dates.
+- **Allocation dialog** shows the oldest expiry per group.
+- **Request cards list the exact units sent** and their use-by dates, for traceability.
+- **Audit log** entries for screening, discards and system expiry.
+- Config: `SHELF_LIFE_DAYS` (35) and `EXPIRY_WARNING_DAYS` (7).
+- **Demo data** rebuilt around units: 91 donors, recent collections, five donations awaiting screening, units close to expiry, weekly ward restocks that consumed older units, some expired units, one donation that failed screening (donor deferred) and one leaking bag that was discarded.
+
+### Tests
+
+- The e2e suite grew from 123 to 169 checks. New coverage:
+  - quarantine, screening pass, re-group and fail;
+  - deferral, and edits and deletes before and after screening;
+  - FEFO unit issue, unit traceability, discards and every refusal;
+  - the expiry sweep, with alerts sent once only;
+  - a concurrency check proving a unit locked by another dispatch is skipped;
+  - new integrity checks: every dispatched unit belongs to an active request, units issued match each allocation, one unit per bag, nothing unscreened in stock, nothing out of date still available, every discard has a reason.
+- The unit suite grew from 23 to 33 checks (unit statuses, screening deferrals, expiry labels).
+
+### Fixed
+
+- The screening queue's group selector no longer stretches full width on desktop.
 ## 2.2.0 — Clinically sound request flow (2026-11-19)
 
 The request flow was reworked so it fits how a blood bank actually works.

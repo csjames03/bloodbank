@@ -12,15 +12,19 @@ final class StockController
     public function index(): void
     {
         $inventory = (new BloodTypeRepository())->inventory();
+        $sum = static fn (string $key) => array_sum(array_map('intval', array_column($inventory, $key)));
 
         View::render('stocks/index', [
             'title'      => 'Blood stock',
             'inventory'  => $inventory,
             'totals'     => [
-                'available'  => array_sum(array_column($inventory, 'bags')),
-                'donated'    => array_sum(array_column($inventory, 'donated')),
-                'dispatched' => array_sum(array_column($inventory, 'dispatched')),
-                'pending'    => array_sum(array_column($inventory, 'pending')),
+                'available'  => $sum('bags'),
+                'expiring'   => $sum('expiring'),
+                'quarantine' => $sum('quarantine'),
+                'wasted'     => $sum('wasted'),
+                'donated'    => $sum('donated'),
+                'dispatched' => $sum('dispatched'),
+                'pending'    => $sum('pending'),
             ],
         ]);
     }

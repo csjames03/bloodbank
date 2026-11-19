@@ -25,13 +25,13 @@ $maxBags = (int) config('inventory.max_donation_bags');
         <div class="dialog-head">
             <div>
                 <h2 id="<?= $p ?>-title"><?= $isEdit ? 'Edit donation' : 'Record a donation' ?></h2>
-                <p><?= $isEdit ? 'Changes to bags or blood type adjust stock automatically.' : 'The bags are added to stock immediately.' ?></p>
+                <p><?= $isEdit ? 'Donor details can always be corrected. Blood type and bags can only change before screening.' : 'Each bag becomes a tracked unit, held in quarantine until it passes lab screening.' ?></p>
             </div>
             <button type="button" class="btn btn-ghost btn-icon btn-sm" data-close-dialog aria-label="Close"><?= icon('x') ?></button>
         </div>
 
         <div class="dialog-body">
-            <?php if ($useOld && error('bags') && str_contains((string) error('bags'), 'dispatched')): ?>
+            <?php if ($useOld && error('bags') && str_contains((string) error('bags'), 'already been screened')): ?>
                 <div class="notice danger" style="margin-bottom:14px"><?= icon('alert', 'icon-sm') ?><span><?= e(error('bags')) ?></span></div>
             <?php endif; ?>
 
@@ -99,7 +99,7 @@ $maxBags = (int) config('inventory.max_donation_bags');
                 <div class="field col-2 <?= $err('bags') ?>">
                     <label class="label" for="<?= $p ?>-bags">Bags</label>
                     <input class="input" id="<?= $p ?>-bags" name="bags" type="number" inputmode="numeric" min="1" max="<?= $maxBags ?>" required value="<?= e($o('bags', '1')) ?>">
-                    <?php if (!($useOld && str_contains((string) error('bags'), 'dispatched'))): ?><?= field_error('bags', $useOld) ?><?php endif; ?>
+                    <?php if (!($useOld && str_contains((string) error('bags'), 'already been screened'))): ?><?= field_error('bags', $useOld) ?><?php endif; ?>
                 </div>
                 <div class="field col-4 <?= $err('medical_status') ?>">
                     <label class="label" for="<?= $p ?>-medical">Medical notes <span class="opt">(optional)</span></label>

@@ -184,6 +184,45 @@ function time_ago(?string $value): string
     };
 }
 
+/** Whole days from now until `$value` (negative when in the past). */
+function days_until(string $value): int
+{
+    $seconds = (new DateTimeImmutable($value))->getTimestamp() - time();
+
+    return (int) floor($seconds / 86400);
+}
+
+/** "expires today" / "expires in 3 days" / "expired 2 days ago". */
+function expiry_label(string $value): string
+{
+    $seconds = (new DateTimeImmutable($value))->getTimestamp() - time();
+    if ($seconds <= 0) {
+        $ago = intdiv(-$seconds, 86400);
+
+        return $ago === 0 ? 'expired today' : 'expired ' . plural($ago, 'day') . ' ago';
+    }
+
+    $days = intdiv($seconds, 86400);
+
+    return match (true) {
+        $days === 0 => 'expires in ' . max(1, intdiv($seconds, 3600)) . 'h',
+        default => 'expires in ' . plural($days, 'day'),
+    };
+}
+
+/** Tone for an expiry date: danger inside the warning window, warning within twice that. */
+function expiry_tone(string $value): string
+{
+    $warn = (int) config('inventory.expiry_warning_days', 7);
+    $days = days_until($value);
+
+    return match (true) {
+        $days < $warn => 'danger',
+        $days < $warn * 2 => 'warning',
+        default => 'neutral',
+    };
+}
+
 function plural(int $count, string $singular, ?string $plural = null): string
 {
     return $count . ' ' . ($count === 1 ? $singular : ($plural ?? $singular . 's'));

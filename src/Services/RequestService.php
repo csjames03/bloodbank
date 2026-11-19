@@ -13,6 +13,7 @@ use App\Domain\RequestStatus;
 use App\Repositories\ActivityRepository;
 use App\Repositories\BloodTypeRepository;
 use App\Repositories\RequestRepository;
+use App\Repositories\UnitRepository;
 
 /**
  * Business rules for hospital blood requests.
@@ -21,6 +22,7 @@ use App\Repositories\RequestRepository;
  *    blood bank's problem to solve at dispatch, not a reason to lose demand.
  *  - At approval, staff decide what to send: the patient's group, compatible
  *    substitutes, or fewer bags than asked (a partial fill).
+ *    Specific units are then issued first-expired-first-out (FEFO).
  *  - The receiving hospital confirms receipt. Staff may record it on their behalf.
  *  - Every state change runs in a transaction with the request row locked,
  *    and is written to the audit log with the actor.
@@ -32,12 +34,14 @@ final class RequestService
     private readonly BloodTypeRepository $bloodTypes;
     private readonly ActivityRepository $activity;
     private readonly Notifier $notify;
+    private readonly UnitRepository $units;
 
     public function __construct()
     {
         $this->db = Database::instance();
         $this->requests = new RequestRepository($this->db);
         $this->bloodTypes = new BloodTypeRepository($this->db);
+        $this->units = new UnitRepository($this->db);
         $this->activity = new ActivityRepository($this->db);
         $this->notify = new Notifier($this->db);
     }
@@ -107,14 +111,28 @@ final class RequestService
 
             $this->validateAllocation($patient, (int) $request['bags'], $allocation);
 
-            // Deduct in a fixed order so concurrent approvals can't deadlock.
+            // Pick the soonest-expiring units of each group (FEFO), in a fixed
+            // group order. Rows locked by a concurrent dispatch are skipped.
             ksort($allocation);
             $byTypeId = [];
+            $unitIds = [];
             foreach ($allocation as $code => $bags) {
                 $typeId = (int) $this->bloodTypes->findByCode($code)['id'];
-                $left = $this->bloodTypes->adjust($typeId, -$bags);
-                $this->notify->stockReduced($typeId, $left, -$bags);
+                $picked = $this->units->pickFefo($typeId, $bags);
+                if (count($picked) < $bags) {
+                    throw new DomainException(sprintf(
+                        'Not enough %s in stock — only %s available.',
+                        $code,
+                        plural(count($picked), 'bag'),
+                    ));
+                }
                 $byTypeId[$typeId] = $bags;
+                $unitIds = [...$unitIds, ...$picked];
+            }
+
+            $this->units->dispatch($unitIds, $id);
+            foreach ($byTypeId as $typeId => $bags) {
+                $this->notify->stockReduced($typeId, $this->bloodTypes->available($typeId), -$bags);
             }
 
             $this->requests->saveAllocation($id, $byTypeId);
@@ -165,14 +183,19 @@ final class RequestService
                 }
             }
 
+            $note = '';
             if ($status === RequestStatus::InTransit) {
-                foreach ($this->requests->allocation($id) as $a) {
-                    $this->bloodTypes->adjust($a['blood_type_id'], $a['bags']);
-                }
+                $returned = $this->units->recall($id);
+                $expired = count(array_keys(array_column($returned, 'status'), 'expired', true));
+                $note = sprintf(
+                    'Dispatch recalled, %s returned to stock%s',
+                    plural(count($returned) - $expired, 'unit'),
+                    $expired ? ", {$expired} expired while out" : '',
+                );
             }
 
             $this->requests->setStatus($id, RequestStatus::Cancelled);
-            $this->activity->log('request', $id, 'cancelled', $by, $status === RequestStatus::InTransit ? 'Dispatch recalled, bags returned to stock' : '');
+            $this->activity->log('request', $id, 'cancelled', $by, $note);
             $this->notify->requestCancelled($id, byHospital: $by->isHospital(), wasDispatched: $status === RequestStatus::InTransit);
         });
     }

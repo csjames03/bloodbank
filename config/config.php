@@ -34,6 +34,10 @@ return [
         'low_stock_threshold' => (int) Env::get('LOW_STOCK_THRESHOLD', '5'),
         'max_request_bags'    => 20,
         'max_donation_bags'   => 2,
+        // Whole blood (CPDA-1) keeps for 35 days from collection.
+        'shelf_life_days'     => (int) Env::get('SHELF_LIFE_DAYS', '35'),
+        // Staff are alerted when available units will expire within this many days.
+        'expiry_warning_days' => (int) Env::get('EXPIRY_WARNING_DAYS', '7'),
         // Minimum days between two whole-blood donations by the same donor.
         'donation_interval_days' => (int) Env::get('DONATION_INTERVAL_DAYS', '56'),
     ],

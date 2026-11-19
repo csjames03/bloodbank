@@ -17,6 +17,8 @@ enum NotificationType: string
     case DonationLogged = 'donation_logged';
     case StockLow = 'stock_low';
     case StockOut = 'stock_out';
+    case UnitsExpiring = 'units_expiring';
+    case UnitsExpired = 'units_expired';
 
     // To hospitals
     case RequestFiled = 'request_filed';
@@ -33,6 +35,8 @@ enum NotificationType: string
             self::RequestCancelled, self::RequestWithdrawn => 'ban',
             self::DonationLogged => 'heart',
             self::StockLow, self::StockOut, self::RequestEmergency => 'alert',
+            self::UnitsExpiring => 'clock',
+            self::UnitsExpired => 'trash',
         };
     }
 
@@ -44,8 +48,8 @@ enum NotificationType: string
             self::RequestDispatched => 'primary',
             self::RequestDelivered, self::RequestReceived, self::DonationLogged => 'success',
             self::RequestCancelled, self::RequestWithdrawn => 'neutral',
-            self::StockLow => 'warning',
-            self::StockOut, self::RequestEmergency => 'danger',
+            self::StockLow, self::UnitsExpiring => 'warning',
+            self::StockOut, self::RequestEmergency, self::UnitsExpired => 'danger',
         };
     }
 

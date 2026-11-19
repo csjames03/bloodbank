@@ -173,6 +173,31 @@ final class Notifier
         }
     }
 
+    /** @param array<string, int> $byCode code => units */
+    public function unitsExpired(array $byCode): void
+    {
+        $n = array_sum($byCode);
+        $this->inbox->toAdmins(
+            Type::UnitsExpired,
+            sprintf('%s expired', plural($n, 'unit')),
+            InventoryService::summarise($byCode) . '. Removed from stock automatically.',
+            '/units?status=expired',
+        );
+    }
+
+    /** @param array<string, int> $byCode code => units */
+    public function unitsExpiring(array $byCode): void
+    {
+        $n = array_sum($byCode);
+        $days = (int) config('inventory.expiry_warning_days', 7);
+        $this->inbox->toAdmins(
+            Type::UnitsExpiring,
+            sprintf('%s expire within %d days', plural($n, 'unit'), $days),
+            InventoryService::summarise($byCode) . '. Dispatch these first. Allocation already uses the soonest-expiring units.',
+            '/units?status=expiring',
+        );
+    }
+
     /** @return array<string, mixed> */
     private function request(int $id): array
     {

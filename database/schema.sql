@@ -4,6 +4,7 @@
 -- ---------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS activity_log        CASCADE;
+DROP TABLE IF EXISTS blood_units         CASCADE;
 DROP TABLE IF EXISTS request_allocations CASCADE;
 DROP TABLE IF EXISTS notifications  CASCADE;
 DROP TABLE IF EXISTS blood_requests CASCADE;
@@ -33,13 +34,13 @@ CREATE TABLE hospitals (
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
--- One row per ABO/Rh group. `bags` is the live, available inventory.
+-- One row per ABO/Rh group. Stock is not stored here: it is the number of
+-- available, unexpired rows in blood_units, so it can never drift.
 CREATE TABLE blood_types (
     id   SMALLSERIAL PRIMARY KEY,
     code VARCHAR(3) NOT NULL UNIQUE,
     abo  VARCHAR(2) NOT NULL CHECK (abo IN ('A', 'B', 'AB', 'O')),
     rh   CHAR(1)    NOT NULL CHECK (rh IN ('+', '-')),
-    bags INTEGER    NOT NULL DEFAULT 0 CHECK (bags >= 0),
     UNIQUE (abo, rh)
 );
 
@@ -54,6 +55,10 @@ CREATE TABLE donors (
     address        VARCHAR(255) NOT NULL,
     blood_type_id  SMALLINT     NOT NULL REFERENCES blood_types (id),
     medical_status VARCHAR(255) NOT NULL DEFAULT 'Fit to donate',
+    -- Set when a donation fails screening. Permanent for HIV / hepatitis.
+    deferred_until       TIMESTAMPTZ,
+    deferred_permanently BOOLEAN      NOT NULL DEFAULT false,
+    deferral_reason      VARCHAR(120),
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -90,6 +95,32 @@ CREATE TABLE blood_requests (
     cancelled_at  TIMESTAMPTZ
 );
 
+-- One row per physical bag. Lifecycle:
+--   quarantine ──pass──▶ available ──dispatch──▶ dispatched
+--        │                  │  ▲                    │
+--        │                  │  └──── recall ────────┘
+--        └──fail / discard──┴──▶ discarded      (any unexpired) ──▶ expired
+-- Stock = available AND expires_at > now(). Dispatch picks the units that
+-- expire first (FEFO).
+CREATE TABLE blood_units (
+    id               SERIAL PRIMARY KEY,
+    unit_code        VARCHAR(12)  GENERATED ALWAYS AS ('LL' || lpad(id::text, 6, '0')) STORED UNIQUE,
+    donation_id      INTEGER      NOT NULL REFERENCES donations (id) ON DELETE CASCADE,
+    blood_type_id    SMALLINT     NOT NULL REFERENCES blood_types (id),
+    status           VARCHAR(12)  NOT NULL DEFAULT 'quarantine'
+                     CHECK (status IN ('quarantine', 'available', 'dispatched', 'discarded', 'expired')),
+    collected_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    expires_at       TIMESTAMPTZ  NOT NULL,
+    screened_at      TIMESTAMPTZ,
+    request_id       INTEGER      REFERENCES blood_requests (id) ON DELETE SET NULL,
+    dispatched_at    TIMESTAMPTZ,
+    discarded_at     TIMESTAMPTZ,
+    discard_reason   VARCHAR(160),
+    expiry_warned_at TIMESTAMPTZ,
+    CHECK (expires_at > collected_at),
+    CHECK ((status = 'dispatched') = (request_id IS NOT NULL))
+);
+
 -- Bags dispatched for a request, per donor group. Counted against stock while
 -- the request is in_transit or completed; kept as history if it is cancelled.
 CREATE TABLE request_allocations (
@@ -103,10 +134,10 @@ CREATE TABLE request_allocations (
 -- survives renamed or deleted accounts.
 CREATE TABLE activity_log (
     id         BIGSERIAL PRIMARY KEY,
-    subject    VARCHAR(20)  NOT NULL CHECK (subject IN ('request', 'donation')),
+    subject    VARCHAR(20)  NOT NULL CHECK (subject IN ('request', 'donation', 'unit')),
     subject_id INTEGER      NOT NULL,
     action     VARCHAR(20)  NOT NULL,
-    actor_role VARCHAR(8)   NOT NULL CHECK (actor_role IN ('admin', 'hospital')),
+    actor_role VARCHAR(8)   NOT NULL CHECK (actor_role IN ('admin', 'hospital', 'system')),
     actor_id   INTEGER      NOT NULL,
     actor_name VARCHAR(150) NOT NULL,
     note       VARCHAR(255) NOT NULL DEFAULT '',
@@ -137,6 +168,10 @@ CREATE INDEX idx_notifications_inbox    ON notifications (recipient_role, recipi
 CREATE INDEX idx_notifications_unread   ON notifications (recipient_role, recipient_id) WHERE read_at IS NULL;
 CREATE INDEX idx_activity_subject       ON activity_log (subject, subject_id);
 CREATE INDEX idx_activity_created_at    ON activity_log (created_at DESC);
+CREATE INDEX idx_units_stock           ON blood_units (blood_type_id, expires_at) WHERE status = 'available';
+CREATE INDEX idx_units_status          ON blood_units (status);
+CREATE INDEX idx_units_donation        ON blood_units (donation_id);
+CREATE INDEX idx_units_request         ON blood_units (request_id) WHERE request_id IS NOT NULL;
 
 INSERT INTO blood_types (code, abo, rh) VALUES
     ('A+', 'A', '+'), ('A-', 'A', '-'),

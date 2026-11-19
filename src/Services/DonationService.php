@@ -11,10 +11,15 @@ use App\Domain\DomainException;
 use App\Repositories\ActivityRepository;
 use App\Repositories\BloodTypeRepository;
 use App\Repositories\DonationRepository;
+use App\Repositories\UnitRepository;
 
 /**
- * Recording, correcting and removing donations while keeping the
- * blood inventory consistent.
+ * Recording, correcting and removing donations.
+ *
+ * Each donation creates one unit per bag, held in quarantine until lab
+ * screening (ScreeningService) releases it to stock. While quarantined the
+ * donation may still be corrected or deleted; once screened, its units are
+ * stock history and change only through explicit actions (discard, dispatch).
  *
  * A donor is one person: a returning donor (same name and phone number) is
  * matched to their existing record instead of being duplicated, must be on
@@ -28,12 +33,14 @@ final class DonationService
     private readonly BloodTypeRepository $bloodTypes;
     private readonly Notifier $notify;
     private readonly ActivityRepository $activity;
+    private readonly UnitRepository $units;
 
     public function __construct()
     {
         $this->db = Database::instance();
         $this->donations = new DonationRepository($this->db);
         $this->bloodTypes = new BloodTypeRepository($this->db);
+        $this->units = new UnitRepository($this->db);
         $this->notify = new Notifier($this->db);
         $this->activity = new ActivityRepository($this->db);
     }
@@ -60,7 +67,7 @@ final class DonationService
             }
 
             $id = $this->donations->create($donorId, $typeId, $bags, $by->hospitalId());
-            $this->bloodTypes->adjust($typeId, $bags);
+            $this->units->createForDonation($id, $typeId, $bags); // quarantined until screening
 
             $name = trim($donor['first_name'] . ' ' . $donor['last_name']);
             $note = sprintf('%s, %s of %s', $name, plural($bags, 'bag'), $group->value);
@@ -89,10 +96,27 @@ final class DonationService
     /** @param array<string, mixed> $existing */
     private function checkReturningDonor(array $existing, BloodGroup $group): void
     {
+        if ($existing['deferred_permanently']) {
+            throw new DomainException(sprintf(
+                '%s is permanently deferred (%s) and must not donate.',
+                $existing['name'],
+                $existing['deferral_reason'] ?? 'failed screening',
+            ), 'contact');
+        }
+        if ($existing['deferred_until'] !== null && new \DateTimeImmutable($existing['deferred_until']) > new \DateTimeImmutable()) {
+            throw new DomainException(sprintf(
+                '%s is deferred until %s (%s).',
+                $existing['name'],
+                fmt_date($existing['deferred_until']),
+                $existing['deferral_reason'] ?? 'failed screening',
+            ), 'contact');
+        }
+
         if ($existing['blood_type'] !== $group->value) {
             throw new DomainException(sprintf(
-                '%s is on record as %s. If the lab has re-grouped this donor, correct their existing donation first.',
+                '%s is on record as %s. If you believe that is wrong, record it as %s and correct the group at screening.',
                 $existing['name'],
+                $existing['blood_type'],
                 $existing['blood_type'],
             ), 'blood_type');
         }
@@ -118,18 +142,21 @@ final class DonationService
             $donation = $this->lock($id);
             $oldTypeId = (int) $donation['blood_type_id'];
             $newTypeId = $this->typeId($group);
+            $unitsChange = $oldTypeId !== $newTypeId || (int) $donation['bags'] !== $bags;
 
-            $this->guardDispatched(function () use ($oldTypeId, $newTypeId, $donation, $bags): void {
-                if ($oldTypeId === $newTypeId) {
-                    $this->reduce($newTypeId, $bags - (int) $donation['bags']);
-                } else {
-                    $this->reduce($oldTypeId, -(int) $donation['bags']);
-                    $this->bloodTypes->adjust($newTypeId, $bags);
-                }
-            });
+            // Group and bag count describe physical units; they can only be
+            // corrected while every unit is still in quarantine. Afterwards,
+            // corrections are explicit: re-group at screening, or discard a unit.
+            if ($unitsChange) {
+                $this->requireAllQuarantined($id, 'change its blood group or number of bags');
+                $this->units->deleteForDonation($id);
+            }
 
             $this->donations->updateDonor((int) $donation['donor_id'], $donor, $newTypeId);
             $this->donations->update($id, $newTypeId, $bags);
+            if ($unitsChange) {
+                $this->units->createForDonation($id, $newTypeId, $bags);
+            }
 
             $changes = [];
             if ($oldTypeId !== $newTypeId) {
@@ -146,15 +173,11 @@ final class DonationService
     {
         $this->db->transaction(function () use ($id, $by): void {
             $donation = $this->lock($id);
+            $this->requireAllQuarantined($id, 'be deleted');
 
-            $this->guardDispatched(fn () => $this->reduce(
-                (int) $donation['blood_type_id'],
-                -(int) $donation['bags'],
-            ));
-
-            $this->donations->delete($id);
+            $this->donations->delete($id); // units cascade
             $this->activity->log('donation', $id, 'deleted', $by, sprintf(
-                '%s of %s removed from stock',
+                '%s of %s removed before screening',
                 plural((int) $donation['bags'], 'bag'),
                 $this->bloodTypes->find((int) $donation['blood_type_id'])['code'] ?? '?',
             ));
@@ -162,12 +185,15 @@ final class DonationService
         });
     }
 
-    /** Apply a stock change and alert staff if it leaves the group low or empty. */
-    private function reduce(int $typeId, int $delta): void
+    /** Units that have been screened are real stock history and can't be rewritten. */
+    private function requireAllQuarantined(int $donationId, string $action): void
     {
-        $left = $this->bloodTypes->adjust($typeId, $delta);
-        if ($delta < 0) {
-            $this->notify->stockReduced($typeId, $left, $delta);
+        $statuses = array_column($this->units->forDonation($donationId, lock: true), 'status');
+        if (array_diff($statuses, ['quarantine']) !== []) {
+            throw new DomainException(
+                "This donation has already been screened, so it can no longer {$action}. "
+                . 'To take a bag out of stock, discard the unit on the Units page.'
+            );
         }
     }
 
@@ -182,20 +208,5 @@ final class DonationService
     {
         return (int) ($this->bloodTypes->findByCode($group->value)['id']
             ?? throw new DomainException('Unknown blood type.'));
-    }
-
-    /**
-     * Removing bags from stock fails when they have already been sent to
-     * hospitals — explain that instead of the generic shortage message.
-     */
-    private function guardDispatched(callable $change): void
-    {
-        try {
-            $change();
-        } catch (DomainException) {
-            throw new DomainException(
-                'Those bags have already been dispatched to hospitals, so this donation can no longer be reduced, moved or removed.'
-            );
-        }
     }
 }
