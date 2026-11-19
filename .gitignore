@@ -1,0 +1,8 @@
+.env
+node_modules/
+vendor/
+tests/.artifacts/
+*.log
+.DS_Store
+Thumbs.db
+tests/.server.log

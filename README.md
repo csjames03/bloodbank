@@ -1,55 +1,96 @@
-# Blood Bank Management System App (Blood Donor App)
+# LifeLine — Blood Bank Management System
 
-## App Description
+A web app for a regional blood bank and its partner hospitals. Staff record donations and keep **live stock for all eight blood groups**. Hospitals **request blood and follow each delivery** from request to hand-off.
 
-The Blood Bank Management System is a comprehensive web application that collects and stores essential information about blood donors, hospitals, and blood recipients. The app facilitates efficient matching of patients with compatible blood types and tracks the location and delivery status of the donor's blood. It provides a robust system to manage the entire process of blood donation and distribution.
+Built with **PHP 8.5** and **PostgreSQL**. It has no framework and no Composer or Node dependencies, and it works on phones as well as desktops.
 
-## App Features
+---
 
-- **Donor Information:** The app records and stores detailed information about blood donors, ensuring a reliable database of potential donors.
+## Features
 
-- **Hospital Information:** Essential details about hospitals, including their locations and contact information, are recorded and stored for easy access.
+| Area | What it does |
+|---|---|
+| **Two portals** | Hospital sign-in (`/login`) and blood bank staff sign-in (`/admin/login`), each with its own permissions. |
+| **Live inventory** | Stock per ABO/Rh group, with low and out-of-stock flags and a coverage check against pending requests. |
+| **Triage** | Requests carry a priority (routine, urgent or emergency) and an optional "needed by" time. Staff see a queue ordered by urgency, and emergencies raise an alert. |
+| **Request lifecycle** | Pending → In transit → Received, or Cancelled. Requests are never refused for low stock. Staff **allocate** at dispatch: the patient's group, compatible substitutes or a partial fill. The **hospital confirms receipt**. |
+| **Delivery tracker** | A three-step progress view with a timestamp for each step, shown to both hospitals and staff. |
+| **Compatibility matching** | The allocation dialog lists only compatible groups and suggests a split that spares O−. A full red-cell compatibility chart is on the Stock page. |
+| **Notifications** | An inbox for each account. Staff hear about new or withdrawn requests, walk-in donors, and groups that run low or out. Hospitals hear when their requests are dispatched, delivered or cancelled. Badges and a toast update live, without reloading the page. |
+| **Donors** | Returning donors are matched by name and phone instead of being duplicated. The 56-day donation interval and the blood group on record are enforced. |
+| **Donations** | Record, edit and remove donations. Stock adjusts automatically, and the app refuses changes that would remove bags already sent out. |
+| **Audit trail** | Every action on requests and donations is logged with who did it. Request trackers show names, and staff have an Activity page. |
+| **Search, filters, paging** | Donors by name or contact, requests by doctor or hospital. Filters by blood type and status, with paginated lists. |
+| **Responsive UI** | Slide-out navigation, tables that turn into cards, and forms that open as bottom sheets on phones. Dark mode follows the OS setting. |
+| **Security** | Hashed passwords, CSRF tokens on every form, prepared statements, escaped output, session hardening and a login throttle. |
 
-- **Blood Records:** The app maintains comprehensive records of available blood types, quantities, and expiration dates.
+## Quick start
 
-- **Blood Location Monitoring:** The app monitors and tracks the current location of a donor's blood, ensuring timely and efficient distribution.
+**Requirements:** PHP 8.2+ (tested on 8.5) with the `pdo_pgsql` extension, and PostgreSQL 13+.
 
-- **Patient-Blood Matching:** It efficiently assigns compatible blood types to patients in need, streamlining the process of finding the right blood match.
+```bash
+# 1. (Optional) copy the config — defaults are postgres/postgres on 127.0.0.1:5432
+cp .env.example .env
 
-- **Blood Delivery Information:** The app stores crucial information about blood deliveries, including progress tracking from departure to current location and successful receipt.
+# 2. Create the database, schema and demo data
+php database/setup.php
 
-## Technologies Used
+# 3. Run it
+php -S localhost:8000 -t public public/index.php
+```
 
-- **PHP:** The app's backend logic is implemented using PHP, enabling seamless data handling and processing.
+Then open **http://localhost:8000**.
 
-- **MySQL:** The database management system MySQL is used to store and manage the app's data efficiently.
+| Portal | URL | Username | Password |
+|---|---|---|---|
+| Blood bank staff | `/admin/login` | `admin` | `admin123` |
+| Hospital | `/login` | `riverside`, `northpoint` or `staclara` | `hospital123` |
 
-- **XAMPP:** XAMPP serves as the local development environment, providing Apache, MySQL, PHP, and Perl stack.
+> ⚠️ `php database/setup.php` **drops and recreates all tables**. Use `--no-seed` to create only the accounts, without demo donors or requests. Change the demo passwords before any real use.
 
-- **Tailwind CSS:** Tailwind CSS is employed for the app's styling, offering a clean and responsive design.
+### Running under Apache / XAMPP
 
-- **HTML:** The app's structure and layout are created using HTML, ensuring compatibility across different browsers.
+Point the virtual host's document root at `public/`. Alternatively, drop the folder into `htdocs/`: the root `.htaccess` forwards requests into `public/`, and the URL prefix is detected automatically. Set `APP_BASE_PATH` in `.env` only if detection gets it wrong.
 
-- **JavaScript:** JavaScript adds interactivity to the app, enhancing the user experience.
+## Tests
 
-## App Accessibility
+The end-to-end suite drives the running app over HTTP the way a browser does (cookies, CSRF tokens, redirects) and checks the database after every step. It has **123 checks** covering both portals, permissions, triage, allocation (substitutes, partial fills and the rules that reject bad splits), receipt, returning donors, the audit log, notifications, stock maths, validation, CSRF and the login throttle. A separate unit suite (**23 checks**, no server needed) covers the compatibility and allocation rules.
 
-- **Admin Portal:** Access the admin features by visiting `localhost://8000/bloodbank/adminlogin`.
+```bash
+php -S 127.0.0.1:8000 -t public public/index.php   # terminal 1
+php tests/e2e.php                                  # terminal 2
+php tests/unit.php                                 # any time, no server or DB
+```
 
-- **User Portal:** Utilize the user features by visiting `localhost://8000/bloodbank`.
+The end-to-end suite resets the database to demo data before and after it runs.
 
-## Note
+## Documentation
 
-The app is not currently optimized for mobile devices, but efforts are underway to improve its mobile-friendliness.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): project layout, request flow, data model and business rules
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md): how to use each screen, for staff and hospitals
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): what changed in the 2.0 rewrite and which bugs it fixed
 
-## Contributions and Issues
+## Project layout
 
-Contributions to the project are welcome! If you encounter any issues or have ideas to enhance the app's functionality, feel free to create an issue or submit a pull request in the repository.
+```
+config/      configuration (env-driven)
+database/    schema.sql, seed.sql, setup.php
+public/      web root: index.php front controller, CSS, JS, favicon
+src/
+  Core/          router, request, view, session, CSRF, auth, validator, DB
+  Domain/        BloodGroup (compatibility), RequestStatus (lifecycle)
+  Repositories/  all SQL
+  Services/      transactional business rules (requests, donations)
+  Controllers/   thin HTTP handlers
+views/       layouts, pages and partials (plain PHP templates)
+tests/       end-to-end suite
+docs/        documentation
+```
 
 ## License
 
-The Blood Bank Management System App is released under the [MIT License](link-to-license), granting users the freedom to use, modify, and distribute the software.
+MIT
 
 ## Contact
 
-For any inquiries or assistance, please contact us at [csjames0303@gmail.com](mailto:csjames0303@gmail.com). Manage blood donations and distribution efficiently with our Blood Donor App!
+For questions or help, email [csjames0303@gmail.com](mailto:csjames0303@gmail.com).

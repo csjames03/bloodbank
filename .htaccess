@@ -1,6 +1,7 @@
+# Apache (e.g. XAMPP at http://localhost/bloodbank): only /public is web-facing.
+# Source, config and database files are never served directly.
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteRule ^(.*)$ index.php?uri=$1 [QSA,L]
+    RewriteRule ^$ public/ [L]
+    RewriteRule ^((?!public/).*)$ public/$1 [L]
 </IfModule>
