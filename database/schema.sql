@@ -4,6 +4,7 @@
 -- ---------------------------------------------------------------------------
 
 DROP TABLE IF EXISTS activity_log        CASCADE;
+DROP TABLE IF EXISTS donor_contacts      CASCADE;
 DROP TABLE IF EXISTS blood_units         CASCADE;
 DROP TABLE IF EXISTS request_allocations CASCADE;
 DROP TABLE IF EXISTS notifications  CASCADE;
@@ -95,6 +96,17 @@ CREATE TABLE blood_requests (
     cancelled_at  TIMESTAMPTZ
 );
 
+-- Donor recall log: every time staff contact a donor to ask them to give.
+CREATE TABLE donor_contacts (
+    id           SERIAL PRIMARY KEY,
+    donor_id     INTEGER      NOT NULL REFERENCES donors (id) ON DELETE CASCADE,
+    outcome      VARCHAR(12)  NOT NULL CHECK (outcome IN ('booked', 'reached', 'no_answer', 'declined')),
+    note         VARCHAR(160) NOT NULL DEFAULT '',
+    blood_type   VARCHAR(3)   NOT NULL,
+    contacted_by VARCHAR(150) NOT NULL,
+    contacted_at TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
 -- One row per physical bag. Lifecycle:
 --   quarantine ──pass──▶ available ──dispatch──▶ dispatched
 --        │                  │  ▲                    │
@@ -134,7 +146,7 @@ CREATE TABLE request_allocations (
 -- survives renamed or deleted accounts.
 CREATE TABLE activity_log (
     id         BIGSERIAL PRIMARY KEY,
-    subject    VARCHAR(20)  NOT NULL CHECK (subject IN ('request', 'donation', 'unit')),
+    subject    VARCHAR(20)  NOT NULL CHECK (subject IN ('request', 'donation', 'unit', 'donor')),
     subject_id INTEGER      NOT NULL,
     action     VARCHAR(20)  NOT NULL,
     actor_role VARCHAR(8)   NOT NULL CHECK (actor_role IN ('admin', 'hospital', 'system')),
@@ -172,6 +184,8 @@ CREATE INDEX idx_units_stock           ON blood_units (blood_type_id, expires_at
 CREATE INDEX idx_units_status          ON blood_units (status);
 CREATE INDEX idx_units_donation        ON blood_units (donation_id);
 CREATE INDEX idx_units_request         ON blood_units (request_id) WHERE request_id IS NOT NULL;
+CREATE INDEX idx_units_dispatched_at   ON blood_units (dispatched_at) WHERE status = 'dispatched';
+CREATE INDEX idx_donor_contacts_donor  ON donor_contacts (donor_id, contacted_at DESC);
 
 INSERT INTO blood_types (code, abo, rh) VALUES
     ('A+', 'A', '+'), ('A-', 'A', '-'),

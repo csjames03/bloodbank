@@ -2,7 +2,8 @@
 /**
  * "Request blood" modal.
  *
- * @var array<string, int> $stock     code => available bags
+ * @var array<string, int> $stock     code => available bags (staff only)
+ * @var array<string, array{level: string, label: string}>|null $levels  hospitals: supply levels instead of counts
  * @var list<array<string, mixed>> $hospitals  (admin only)
  */
 use App\Core\Session;
@@ -16,11 +17,13 @@ foreach (BloodGroup::cases() as $g) {
     $compat[$g->value] = array_map(static fn (BloodGroup $d) => $d->value, $g->canReceiveFrom());
 }
 $selected = $o('blood_type', 'A+');
+$levels ??= [];
+$showLevels = !is_admin();
 ?>
 <dialog class="dialog" id="request-create" aria-labelledby="request-create-title">
     <div class="dialog-grip"></div>
     <form method="post" action="<?= e(url('/requests')) ?>" class="dialog-body-form" novalidate
-          data-request-form data-stock='<?= e(json_encode($stock)) ?>' data-compat='<?= e(json_encode($compat)) ?>'>
+          data-request-form <?= $showLevels ? "data-levels='" . e(json_encode($levels)) . "'" : "data-stock='" . e(json_encode($stock)) . "'" ?> data-compat='<?= e(json_encode($compat)) ?>'>
         <?= csrf_field() ?>
         <div class="dialog-head">
             <div>
@@ -54,12 +57,12 @@ $selected = $o('blood_type', 'A+');
                 </div>
 
                 <fieldset class="field col-6" style="border:0;padding:0">
-                    <legend class="label" style="margin-bottom:6px">Blood type <span class="opt">· bags in stock</span></legend>
+                    <legend class="label" style="margin-bottom:6px">Blood type <span class="opt">· <?= $showLevels ? 'current supply' : 'bags in stock' ?></span></legend>
                     <div class="type-picker">
                         <?php foreach (BloodGroup::codes() as $code): ?>
                             <label>
                                 <input type="radio" name="blood_type" value="<?= e($code) ?>" <?= $selected === $code ? 'checked' : '' ?>>
-                                <span><?= e($code) ?><small><?= (int) ($stock[$code] ?? 0) ?> in stock</small></span>
+                                <span><?= e($code) ?><small class="<?= $showLevels ? 'level-text-' . e($levels[$code]['level'] ?? 'healthy') : '' ?>"><?= $showLevels ? e($levels[$code]['label'] ?? 'Available') : (int) ($stock[$code] ?? 0) . ' in stock' ?></small></span>
                             </label>
                         <?php endforeach; ?>
                     </div>

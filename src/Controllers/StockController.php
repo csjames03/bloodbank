@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Core\View;
 use App\Repositories\BloodTypeRepository;
+use App\Services\SupplyService;
 
 final class StockController
 {
@@ -17,6 +18,7 @@ final class StockController
         View::render('stocks/index', [
             'title'      => 'Blood stock',
             'inventory'  => $inventory,
+            'supply'     => (new SupplyService())->byCode(),
             'totals'     => [
                 'available'  => $sum('bags'),
                 'expiring'   => $sum('expiring'),

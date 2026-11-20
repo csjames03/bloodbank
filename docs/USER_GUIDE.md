@@ -17,7 +17,7 @@ On phones, tap **☰** at the top left to open the menu.
 
 - **Key figures:** usable bags in stock, pending requests, deliveries in transit, and donations awaiting screening. Tap a card to jump to the related list.
 - **Expiring within 7 days:** units that will expire soon, with how long each has left. They're dispatched first automatically. This panel is a prompt to offer them to hospitals before they go to waste.
-- **Stock by blood group:** one tile per group, counting only screened, unexpired units. Tiles marked **Low** are at or below the threshold (5 bags by default), and **Out** means none are left. Tap a tile to see donations of that group.
+- **Stock by blood group:** one tile per group, counting only screened, unexpired units, with its **days of supply** underneath. A tile is flagged **Low** under 7 days, **Critical** under 3, and **Out** at zero. Tap a tile to see that group's units.
 - **Requests & deliveries:** the triage queue, in the same order as the Requests page.
 - **Recent donations:** the latest people who gave blood.
 
@@ -108,8 +108,25 @@ After screening, a unit is part of the stock history, so corrections are explici
 ### Blood stock page
 
 - **Totals:** units available, units expiring within 7 days, units in quarantine, and units wasted (expired or discarded) in the last 30 days. Each card links to the matching unit list.
-- **Per-group table:** available, expiring soon, the next expiry date, units in quarantine, pending demand, and a status (*Healthy*, *Low*, *Out of stock*, or *Short N* when more is pending than available).
+- **Per-group table:** available, **days of supply** and average daily use, expiring soon, the next expiry date, units in quarantine, pending demand, and a supply level (*Healthy*, *Low*, *Critical*, *Out of stock*, plus *Short N* when more is pending than available). Groups that need donors have a **Recall** link.
 - **Compatibility chart:** which donor groups each patient group can safely receive.
+
+### Days of supply
+
+A bag count alone can mislead: 6 bags is plenty for a group used once a week, and an emergency for one used five times a day. So each group is measured as
+
+> **days of supply** = usable bags ÷ average bags issued per day over the last 30 days
+
+The app rates each group **Healthy** (7+ days), **Low** (under 7), **Critical** (under 3) or **Out**. You're notified when a group gets worse, with the days left and how many donors can be called in.
+
+### Donor recall
+
+**Donor recall** (with a badge counting groups that need it) opens on the group in the worst position.
+
+1. The strip at the top shows every group's days of supply. Pick one.
+2. The list shows donors of that group who can give now: not deferred, and at least 56 days since their last donation. Donors not called in the last 7 days come first, then the most regular donors.
+3. Tap a phone number to call, then use **Log call** to record the outcome (*Booked to donate*, *Reached*, *No answer*, *Declined*) with an optional note. Called donors drop down the list for a week, so the team doesn't call the same people twice.
+4. **Export call list (CSV)** downloads everyone eligible for that group, for call sheets or an SMS tool.
 
 ---
 
@@ -119,7 +136,7 @@ After screening, a unit is part of the stock history, so corrections are explici
 
 - How many of your requests are pending, on the way, received or cancelled.
 - **Your deliveries:** a tracker for each request (Requested → Dispatched → Received) with times and who did each step.
-- **Available now:** current stock for every blood group, so you know what to expect.
+- **Available now:** the supply level for every blood group: **Available**, **Limited**, **Critical** or **Unavailable**. Exact counts are kept by the blood bank. Whatever the level, request what the patient needs.
 
 ### Requesting blood
 
@@ -158,7 +175,7 @@ Open **Notifications** in the menu, or tap the bell at the top right on a phone.
 
 | You are | You're notified when |
 |---|---|
-| **Staff** | A hospital submits a request (emergencies are flagged in red), withdraws a request or confirms receipt; a hospital logs a walk-in donor; a blood group runs low or out; units are about to expire or have expired |
+| **Staff** | A hospital submits a request (emergencies are flagged in red), withdraws a request or confirms receipt; a hospital logs a walk-in donor; a blood group's supply becomes low, critical or runs out (with a link to the recall list); units are about to expire or have expired |
 | **Hospital** | Your request is dispatched (including any substitute or partial fill), recorded as received or cancelled, or the blood bank files a request for you |
 
 - Click a notification to mark it read and jump straight to the request it's about.

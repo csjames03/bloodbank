@@ -42,6 +42,25 @@ return [
         'donation_interval_days' => (int) Env::get('DONATION_INTERVAL_DAYS', '56'),
     ],
 
+    // Days of supply = usable units ÷ average daily use over the window.
+    'supply' => [
+        'usage_window_days' => (int) Env::get('SUPPLY_WINDOW_DAYS', '30'),
+        // Below this many days of supply a group is Critical, below `low_days` Low.
+        'critical_days'     => (float) Env::get('SUPPLY_CRITICAL_DAYS', '3'),
+        'low_days'          => (float) Env::get('SUPPLY_LOW_DAYS', '7'),
+        // Donors contacted within this many days are shown as "recently contacted".
+        'recall_cooldown_days' => (int) Env::get('RECALL_COOLDOWN_DAYS', '7'),
+    ],
+
+    // Live updates: "poll" (works everywhere, incl. `php -S`) or "sse"
+    // (Server-Sent Events via PostgreSQL LISTEN/NOTIFY; needs a server that
+    // handles concurrent requests, e.g. Apache or Nginx + PHP-FPM).
+    'realtime' => [
+        'mode'           => Env::get('REALTIME_MODE', 'poll'),
+        'poll_seconds'   => (int) Env::get('POLL_SECONDS', '30'),
+        'stream_seconds' => (int) Env::get('STREAM_SECONDS', '25'),
+    ],
+
     'pagination' => [
         'per_page' => 12,
     ],

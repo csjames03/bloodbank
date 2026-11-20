@@ -24,7 +24,9 @@ final class Database
     {
         if (self::$instance === null) {
             $c = Config::get('db');
-            $pdo = new PDO(
+            // PDO::connect() returns the driver subclass (Pdo\Pgsql), which
+            // adds getNotify() for LISTEN/NOTIFY-based live updates.
+            $pdo = PDO::connect(
                 sprintf('pgsql:host=%s;port=%d;dbname=%s', $c['host'], $c['port'], $c['database']),
                 $c['username'],
                 $c['password'],
@@ -39,6 +41,32 @@ final class Database
         }
 
         return self::$instance;
+    }
+
+    /** Subscribe this connection to a PostgreSQL NOTIFY channel. */
+    public function listen(string $channel): void
+    {
+        $this->pdo->exec('LISTEN ' . preg_replace('/[^a-z_]/', '', $channel));
+    }
+
+    /**
+     * Wait up to `$timeoutMs` for a notification on a LISTENed channel.
+     * Returns ['message' => channel, 'payload' => ...] or null on timeout
+     * (or when the driver can't wait, in which case it simply sleeps).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function waitForNotify(int $timeoutMs): ?array
+    {
+        if ($this->pdo instanceof \Pdo\Pgsql) {
+            $n = $this->pdo->getNotify(PDO::FETCH_ASSOC, $timeoutMs);
+
+            return is_array($n) ? $n : null;
+        }
+
+        usleep($timeoutMs * 1000);
+
+        return null;
     }
 
     /** @param array<int|string, mixed> $params */

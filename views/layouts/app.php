@@ -1,15 +1,18 @@
 <?php
 /** @var string $content */
 
+use App\Controllers\NotificationController;
 use App\Core\Session;
 use App\Repositories\NotificationRepository;
 use App\Repositories\RequestRepository;
 use App\Repositories\UnitRepository;
+use App\Services\SupplyService;
 
 $user = auth_user();
 $admin = is_admin();
 $pendingCount = $admin ? (new RequestRepository())->summary()['pending']['count'] : 0;
 $screeningCount = $admin ? (new UnitRepository())->quarantinedDonations() : 0;
+$recallCount = $admin ? count(array_filter((new SupplyService())->forecast(), static fn ($f) => $f['level']->needsRecall())) : 0;
 $notifs = (new NotificationRepository())->counts($user['role'], (int) $user['id']);
 $unreadLabel = $notifs['unread'] > 99 ? '99+' : (string) $notifs['unread'];
 
@@ -21,6 +24,7 @@ $nav = $admin
         ['/donations', 'heart', 'Donations', 0],
         ['/stocks', 'package', 'Blood stock', 0],
         ['/units', 'droplet', 'Units', 0],
+        ['/recall', 'users', 'Donor recall', $recallCount],
         ['/activity', 'activity', 'Activity', 0],
         ['/notifications', 'bell', 'Notifications', 0],
     ]
@@ -32,7 +36,8 @@ $nav = $admin
 ?>
 <?php require BASE_PATH . '/views/partials/head.php'; ?>
 <body data-reopen-dialog="<?= e(Session::getFlash('open_dialog', '')) ?>"
-      data-notif-poll="<?= e(url('/notifications/poll')) ?>" data-notif-latest="<?= $notifs['latest'] ?>" data-notif-unread="<?= $notifs['unread'] ?>"
+      data-notif-poll="<?= e(url('/notifications/poll')) ?>" data-notif-stream="<?= e(url('/notifications/stream')) ?>"
+      data-realtime="<?= e(NotificationController::realtimeMode()) ?>" data-poll-seconds="<?= (int) config('realtime.poll_seconds', 30) ?>" data-notif-latest="<?= $notifs['latest'] ?>" data-notif-unread="<?= $notifs['unread'] ?>"
       data-notif-page="<?= e(url('/notifications')) ?>">
 <?php require BASE_PATH . '/views/partials/icons.php'; ?>
 
@@ -58,7 +63,7 @@ $nav = $admin
                     <?php elseif ($admin && $path === '/requests'): ?>
                         <span class="count" data-pending-count title="Pending requests" <?= $count ? '' : 'hidden' ?>><?= $count ?></span>
                     <?php elseif ($count > 0): ?>
-                        <span class="count count-soft" title="Donations awaiting screening"><?= $count ?></span>
+                        <span class="count count-soft <?= $path === '/recall' ? 'count-alert' : '' ?>" title="<?= $path === '/recall' ? 'Blood groups that need a donor recall' : 'Donations awaiting screening' ?>"><?= $count ?></span>
                     <?php endif; ?>
                 </a>
             <?php endforeach; ?>

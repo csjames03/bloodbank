@@ -51,6 +51,9 @@ Every state-changing request follows **Post/Redirect/Get**:
 | `src/Services/InventoryService.php` | Expiry sweep (expire units, warn about units nearing expiry) and manual discards with a reason. |
 | `src/Repositories/UnitRepository.php` | Every stock movement: create, release, FEFO pick with `SKIP LOCKED`, dispatch, recall, discard, expire. |
 | `src/Domain/UnitStatus.php`, `ScreeningFailure.php`, `DiscardReason.php` | Unit lifecycle; screening outcomes and the donor deferral each implies; reasons for discards. |
+| `src/Domain/SupplyLevel.php` | Healthy / Low / Critical / Out from days of supply, with severity, staff and hospital labels. |
+| `src/Services/SupplyService.php` | Days of supply per group: usable units ÷ average daily issue over the window. Feeds the stock page, dashboard, alerts and hospital levels. |
+| `src/Repositories/DonorRepository.php`, `src/Services/RecallService.php` | Who is eligible to be called in, ranked; the recall call log. |
 | `src/Services/Notifier.php` | Turns business events into notifications. Services call it inside their transaction. |
 | `src/Domain/NotificationType.php` | Enum of notification kinds, each with an icon and colour tone. |
 | `src/Repositories/*` | All SQL lives here; controllers never write queries. |
@@ -82,6 +85,7 @@ admins            hospitals ─────────────┐
 | `request_allocations` | What was actually sent for a request: one row per donor group with its bag count. It may differ from the request (a substitute) and total less (a partial fill). |
 | `activity_log` | Audit trail: subject (`request`/`donation`/`unit`), action, actor role, id and name (copied, so the history survives account changes), a note, and the time. |
 | `admins`, `hospitals` | Accounts with `password_hash` (bcrypt via `password_hash()`). |
+| `donor_contacts` | Recall call log: donor, outcome (`booked`, `reached`, `no_answer`, `declined`), note, the group the call was for, who called and when. |
 | `notifications` | One row per recipient (`recipient_role` + `recipient_id`), with `type`, `title`, `body`, an internal `link`, an optional `request_id`, and `read_at`. Staff alerts fan out to every admin account. |
 
 ### Stock and the unit lifecycle
@@ -104,6 +108,24 @@ The e2e suite checks these invariants at the end of its run:
 - No unit reached stock or a hospital unscreened.
 - No out-of-date unit is still `available`.
 - Every discard has a reason.
+
+### Days of supply
+
+```
+daily use      = units issued to hospitals in the last SUPPLY_WINDOW_DAYS (30) ÷ 30
+days of supply = usable units ÷ daily use
+```
+
+| Level | Rule |
+|---|---|
+| Out | 0 usable units |
+| Critical | under `SUPPLY_CRITICAL_DAYS` (3) days |
+| Low | under `SUPPLY_LOW_DAYS` (7) days |
+| Healthy | otherwise |
+
+With no usage history, the group falls back to the bag threshold (`LOW_STOCK_THRESHOLD`). Recalled units don't count as usage. Units issued in the current transaction are excluded (`dispatched_at < now()`, where `now()` is the transaction start), so a dispatch is judged against the rate before it.
+
+After every stock reduction (dispatch, discard or expiry), `Notifier::stockReduced` compares the level before and after, and alerts only if it got **worse** and is now Low or worse. The alert states the days of supply and how many eligible donors there are, and links to the recall page.
 
 ### Expiry sweep
 
@@ -156,6 +178,20 @@ pending ──allocate & dispatch──► in_transit ──receive──► com
 | A donation can only be screened once. | `ScreeningService::lockQuarantined` |
 | **Discard** (staff only): only quarantined or available units, always with a reason (damaged, cold-chain breach, haemolysed, clotted, labelling, other) plus an optional note. Logged, and it triggers low-stock alerts. | `InventoryService::discard` |
 
+### Donor recall
+
+| Rule | Where |
+|---|---|
+| **Eligible** = not permanently deferred, any temporary deferral has ended, and the last donation was at least `donation_interval_days` (56) ago (or never). | `DonorRepository::ELIGIBLE` |
+| **Ranking:** not called in the last `RECALL_COOLDOWN_DAYS` (7) first, then most donations (loyal donors respond best), then longest since their last donation. | `DonorRepository::eligible` |
+| The page opens on the group in the worst supply position (highest severity, then fewest days). | `RecallController::group` |
+| Calls can only be logged for eligible donors. Every call is in the audit log. | `RecallService::logContact` |
+| CSV export: UTF-8 with BOM (so spreadsheets keep names intact), one row per eligible donor. Staff only, as it contains contact details. | `RecallController::export` |
+
+### Hospital availability levels
+
+Hospitals never receive stock numbers: not on the dashboard, in the request form's HTML or JavaScript data, nor in confirmation messages. They get `SupplyService::hospitalLevels()` (Available / Limited / Critical / Unavailable) instead. Staff screens keep exact counts.
+
 ### Notifications
 
 Each notification is written in the same transaction as the change that caused it, so a rolled-back action never leaves a notification behind.
@@ -170,18 +206,17 @@ Each notification is written in the same transaction as the change that caused i
 | Staff cancel a request (an in-transit cancel says the dispatch was recalled) | Hospital | `request_cancelled` |
 | Hospital withdraws its own request | All staff | `request_withdrawn` |
 | Hospital logs a walk-in donor | All staff | `donation_logged` |
-| A group drops to the low-stock threshold, or to 0 (dispatch, discard or expiry) | All staff | `stock_low` / `stock_out` |
+| A group's supply level worsens to Low, Critical or Out (dispatch, discard or expiry) | All staff | `stock_low` / `stock_critical` / `stock_out` |
 | Units enter the expiry-warning window | All staff | `units_expiring` |
 | Units expire | All staff | `units_expired` |
 
 Stock alerts fire only when a group *crosses* the threshold, not on every later change.
 
-**Delivery to the browser:**
+**Delivery to the browser** has two modes, chosen with `REALTIME_MODE`. Both carry the same payload: the unread count, the pending-request count (staff only) and any new unread items. These update the nav badges, the mobile bell and the tab title, and show a toast for each new item.
 
-- The layout embeds the newest notification ID and the unread count.
-- `app.js` polls `GET /notifications/poll?after=<id>` every 30 seconds while the tab is visible, and immediately when it becomes visible again.
-- The response holds the unread count, the pending-request count (staff only) and any new unread items. These update the nav badges, the mobile bell and the tab title, and show a toast for each new item.
-- Polling stops if the session has ended.
+- **`poll` (default):** `app.js` calls `GET /notifications/poll?after=<id>` every `POLL_SECONDS` (30) while the tab is visible, and immediately when it becomes visible again. Polling stops if the session has ended.
+- **`sse`:** `app.js` opens an `EventSource` on `GET /notifications/stream`. The server sends a snapshot straight away, then `LISTEN`s on the `lifeline_inbox` channel. `NotificationRepository` issues `pg_notify` with the recipient (`admin:*` or `hospital:<id>`) whenever it stores a notification, and PostgreSQL delivers that **only when the transaction commits**, so a rolled-back action never pushes anything. On a matching notification, the stream pushes a fresh snapshot within milliseconds. It sends a keep-alive every 15 seconds, closes after `STREAM_SECONDS` (25) to free the PHP worker, and the browser reconnects automatically using `Last-Event-ID`. If the stream fails three times before delivering anything, the page falls back to polling.
+- **Safety:** `NotificationController::realtimeMode()` forces `poll` on PHP's single-threaded built-in server, where one open stream would block every other request.
 
 Opening a notification is a POST to `/notifications/{id}/open`. It marks the notification read and redirects to its link, which jumps to the request card. Ownership is checked in the `UPDATE`, so an ID from another inbox does nothing. Read notifications older than 90 days are pruned whenever the inbox is opened.
 
@@ -194,7 +229,8 @@ Opening a notification is a POST to `/notifications/{id}/open`. It marks the not
 | CSRF | A per-session token is checked on every POST by the router. Logout is POST-only. |
 | Passwords | `password_hash` / `password_verify`. Login errors don't reveal whether the username exists. Five failures within 60 seconds trigger a lockout. |
 | Sessions | `HttpOnly`, `SameSite=Lax` and `Secure` when on HTTPS. Strict mode is on, and the session ID is regenerated on login. |
-| Authorization | Route guards plus ownership checks in the services (hospitals only see and cancel their own requests). |
+| Authorization | Route guards plus ownership checks in the services (hospitals only see and cancel their own requests). Donor contact details (recall and export) are staff-only. |
+| Data exposure | Hospitals see supply levels, never stock counts. |
 | Errors | Warnings are promoted to exceptions. Users see a friendly error page, and stack traces appear only when `APP_DEBUG=true`. |
 | Exposure | Only `public/` is web-facing. The root `.htaccess` keeps source, config and SQL files out of reach on Apache. |
 
@@ -221,3 +257,8 @@ All settings live in `config/config.php`, and each can be overridden from `.env`
 | `DONATION_INTERVAL_DAYS` | `56` days between donations by the same donor |
 | `SHELF_LIFE_DAYS` | `35` days from collection (whole blood, CPDA-1) |
 | `EXPIRY_WARNING_DAYS` | `7`: units expiring within this many days are flagged and alerted |
+| `SUPPLY_WINDOW_DAYS` | `30` days of issue history used for the daily-use rate |
+| `SUPPLY_LOW_DAYS`, `SUPPLY_CRITICAL_DAYS` | `7` and `3` days of supply |
+| `RECALL_COOLDOWN_DAYS` | `7`: donors called within this many days drop down the recall list |
+| `REALTIME_MODE` | `poll`, or `sse` on a server with concurrent workers |
+| `POLL_SECONDS`, `STREAM_SECONDS` | `30` and `25` |

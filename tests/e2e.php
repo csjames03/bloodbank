@@ -260,7 +260,8 @@ $h->post('/requests', ['doctor_name' => 'Jane Cruz', 'blood_type' => 'AB-', 'bag
 $bigId = (int) db()->value('SELECT MAX(id) FROM blood_requests');
 $big = db()->one('SELECT * FROM blood_requests WHERE id = ?', [$bigId]);
 check('Request larger than stock is accepted', $bigId > $newId && $big['status'] === 'pending' && stock('AB-') === $abNegStart, $h->toast());
-check('…with a heads-up that it may be substituted or partly filled', str_contains($h->toast(), "Only {$abNegStart} bags of AB-") && str_contains($h->toast(), 'compatible group'), $h->toast());
+check('…with a heads-up that it may be substituted or partly filled', str_contains($h->toast(), 'compatible group'), $h->toast());
+check('…without revealing the stock count to the hospital', !preg_match('/\b' . $abNegStart . ' bags?\b/', $h->toast()) && !str_contains($h->toast(), 'in stock'), $h->toast());
 check('Priority and “needed by” are stored', $big['priority'] === 'emergency' && substr((new DateTimeImmutable($big['needed_by']))->format('Y-m-d\TH:i'), 0, 16) === $neededBy);
 
 $h->get('/');
@@ -699,13 +700,32 @@ check(
         && (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'request_cancelled' AND request_id = ?", [$otherId]) === 0,
 );
 
-// Crossing the low-stock threshold alerts staff once.
-$bNegPending = (int) db()->value("SELECT r.id FROM blood_requests r JOIN blood_types bt ON bt.id = r.blood_type_id WHERE bt.code = 'B-' AND r.status = 'pending'");
-$bNeg = stock('B-');
-limitStock('B-', (int) config('inventory.low_stock_threshold') + 1);
-$lowBefore = (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title LIKE 'B-%'");
-$a->post("/requests/{$bNegPending}/approve");
-check('Stock dropping to the low threshold alerts staff', (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title LIKE 'B-%'") === $lowBefore + 1);
+// Supply alerts fire when a group's days of supply crosses into Low.
+// Take the busiest group and leave it exactly at the Low boundary.
+$window = (int) config('supply.usage_window_days');
+$busy = db()->one(
+    "SELECT bt.code, COUNT(u.id)::float / ? AS daily FROM blood_types bt
+     LEFT JOIN blood_units u ON u.blood_type_id = bt.id AND u.status = 'dispatched' AND u.dispatched_at >= now() - make_interval(days => ?)
+     GROUP BY bt.code ORDER BY daily DESC LIMIT 1",
+    [$window, $window],
+);
+$edge = max(1, (int) ceil((float) config('supply.low_days') * (float) $busy['daily']));
+$a->get('/requests');
+$a->post('/requests', ['hospital_id' => (string) $staclara, 'doctor_name' => 'Supply Edge', 'blood_type' => $busy['code'], 'bags' => '1']);
+$edgeId = (int) db()->value('SELECT MAX(id) FROM blood_requests');
+limitStock($busy['code'], $edge);
+$lowBefore = (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title = ?", ["{$busy['code']} is running low"]);
+$a->post("/requests/{$edgeId}/approve", ['alloc' => [$busy['code'] => '1']]);
+check(
+    "Dropping below {$busy['code']}'s Low line ({$edge} bags at " . round((float) $busy['daily'], 2) . '/day) alerts staff',
+    (int) db()->value("SELECT COUNT(*) FROM notifications WHERE type = 'stock_low' AND title = ?", ["{$busy['code']} is running low"]) === $lowBefore + 1,
+    $a->toast(),
+);
+check(
+    '…with days of supply and a link to the recall list',
+    (bool) db()->value("SELECT 1 FROM notifications WHERE type = 'stock_low' AND title = ? AND body LIKE '%of supply%' AND link = ? ORDER BY id DESC LIMIT 1",
+        ["{$busy['code']} is running low", "/recall?group={$busy['code']}"]),
+);
 restoreStock();
 
 $oPos = stock('O+');
@@ -752,6 +772,110 @@ check('…and other inboxes are untouched', db()->value('SELECT read_at FROM not
 $g = new Browser($base);
 $g->get('/notifications/poll');
 check('Guests cannot poll notifications', str_ends_with($g->url, '/login'));
+
+/* ------------------------------------------------------------------------- */
+section('Days of supply & donor recall');
+
+$a->get('/stocks');
+check('Stock page shows days of supply and daily use per group', noErrors($a) && str_contains($a->body, 'Days of supply') && str_contains($a->body, '/day used'));
+$a->get('/');
+check('Dashboard tiles show days of supply', noErrors($a) && str_contains($a->body, 'class="tile-days"'));
+
+$interval = (int) config('inventory.donation_interval_days');
+$eligibleSql = "SELECT COUNT(*) FROM donors d JOIN blood_types bt ON bt.id = d.blood_type_id
+    WHERE bt.code = ? AND NOT d.deferred_permanently AND (d.deferred_until IS NULL OR d.deferred_until <= now())
+      AND COALESCE((SELECT MAX(donated_at) FROM donations WHERE donor_id = d.id), '-infinity') <= now() - make_interval(days => ?)";
+$oNegEligible = (int) db()->value($eligibleSql, ['O-', $interval]);
+
+$a->get('/recall');
+check('Recall page opens on the group in the worst supply position', noErrors($a) && str_contains($a->body, 'aria-selected="true"') && str_contains($a->body, 'Days of supply'));
+$a->get('/recall?group=O-');
+check("Recall lists every eligible O- donor ({$oNegEligible})", noErrors($a) && $oNegEligible > 0 && str_contains($a->body, plural($oNegEligible, 'eligible donor') . ' · O-'));
+
+$a->get('/recall?group=A%2B');
+check('Donors who gave within the donation interval are not listed', !str_contains($a->body, 'Maria Santos Reyes'));
+$deferred = db()->one("SELECT d.first_name, d.last_name, bt.code FROM donors d JOIN blood_types bt ON bt.id = d.blood_type_id WHERE d.deferred_permanently LIMIT 1");
+$a->get('/recall?group=' . rawurlencode($deferred['code']));
+check('Deferred donors are never listed for recall', !str_contains($a->body, "{$deferred['first_name']} {$deferred['last_name']}</div>"));
+
+$callee = (int) db()->value(
+    "SELECT d.id FROM donors d JOIN blood_types bt ON bt.id = d.blood_type_id
+     WHERE bt.code = 'O-' AND NOT d.deferred_permanently
+       AND (SELECT MAX(donated_at) FROM donations WHERE donor_id = d.id) <= now() - make_interval(days => ?)
+     ORDER BY d.id LIMIT 1",
+    [$interval],
+);
+$a->get('/recall?group=O-');
+$a->post("/recall/{$callee}/contact", ['outcome' => 'booked', 'note' => 'Saturday 9am']);
+check('Staff can log a recall call', (int) db()->value("SELECT COUNT(*) FROM donor_contacts WHERE donor_id = ? AND outcome = 'booked' AND note = 'Saturday 9am'", [$callee]) === 1 && str_contains($a->toast(), 'Call logged'), $a->toast());
+check('…the call is in the audit log', (int) db()->value("SELECT COUNT(*) FROM activity_log WHERE subject = 'donor' AND subject_id = ? AND action = 'contacted'", [$callee]) === 1);
+$a->get('/recall?group=O-');
+check('…and the donor shows as recently contacted (moved down the list)', str_contains($a->body, 'Booked to donate') && str_contains($a->body, 'class="is-muted"'));
+
+$maria = (int) db()->value("SELECT id FROM donors WHERE lower(first_name) = 'maria' AND lower(last_name) = 'reyes'");
+$a->post("/recall/{$maria}/contact", ['outcome' => 'reached']);
+check('A donor who is not eligible cannot be logged as called', (int) db()->value('SELECT COUNT(*) FROM donor_contacts WHERE donor_id = ?', [$maria]) === 0 && str_contains($a->toast(), 'not eligible'));
+$a->post("/recall/{$callee}/contact", ['outcome' => 'maybe']);
+check('An unknown call outcome is rejected', str_contains($a->toast(), 'Choose how the call went'));
+
+$a->get('/recall/export?group=O-');
+$lines = array_values(array_filter(explode("\n", trim($a->body))));
+check(
+    'Call list exports as CSV with one row per eligible donor',
+    $a->status === 200 && str_starts_with($a->body, "\xEF\xBB\xBFName,\"Blood group\",Contact") && count($lines) === $oNegEligible + 1,
+    count($lines) . ' lines',
+);
+
+$hr = new Browser($base);
+$hr->get('/login');
+$hr->post('/login', ['username' => 'northpoint', 'password' => 'hospital123']);
+$hr->get('/recall');
+check('Hospitals cannot open donor recall (403)', $hr->status === 403);
+$hr->get('/recall/export?group=O-');
+check('Hospitals cannot export donor contact details (403)', $hr->status === 403);
+
+$hr->get('/');
+check('Hospital dashboard shows availability levels, not counts', noErrors($hr) && str_contains($hr->body, 'is-band') && !str_contains($hr->body, 'class="blood-bags"'));
+check(
+    'Hospital request form carries levels, never stock numbers',
+    str_contains($hr->body, 'data-levels=') && !str_contains($hr->body, 'data-stock=') && !str_contains($hr->body, ' in stock</small>'),
+);
+$hr->get('/requests');
+check('…also on the requests page', noErrors($hr) && str_contains($hr->body, 'data-levels=') && !str_contains($hr->body, 'data-stock='));
+
+/* ------------------------------------------------------------------------- */
+section('Live updates');
+
+$a->get('/');
+check('On the built-in dev server the page uses polling (SSE would block it)', str_contains($a->body, 'data-realtime="poll"'));
+$a->get('/notifications/stream?max=0');
+check(
+    'The live stream sends an inbox snapshot as a Server-Sent Event',
+    $a->status === 200 && str_contains($a->body, "event: inbox\n") && (bool) preg_match('/^data: \{"unread":\d+/m', $a->body) && str_contains($a->body, 'retry: 1000'),
+    substr($a->body, 0, 120),
+);
+check('…tagged with the latest notification id for resuming', (bool) preg_match('/^id: \d+$/m', $a->body));
+$gs = new Browser($base);
+$gs->get('/notifications/stream?max=0');
+check('Guests cannot open the stream', str_ends_with($gs->url, '/login'));
+
+// Push mechanism: a listener only hears about a notification once it commits.
+$cfg = Config::get('db');
+$listener = PDO::connect(sprintf('pgsql:host=%s;port=%d;dbname=%s', $cfg['host'], $cfg['port'], $cfg['database']), $cfg['username'], $cfg['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+$listener->exec('LISTEN ' . App\Repositories\NotificationRepository::CHANNEL);
+$inbox = new App\Repositories\NotificationRepository(db());
+try {
+    db()->transaction(static function () use ($inbox): void {
+        $inbox->toHospital((int) db()->value("SELECT id FROM hospitals WHERE username = 'riverside'"), App\Domain\NotificationType::RequestFiled, 'Rolled back');
+        throw new RuntimeException('rollback');
+    });
+} catch (RuntimeException) {
+}
+check('A rolled-back change pushes nothing to live streams', $listener->getNotify(PDO::FETCH_ASSOC, 300) === false);
+db()->transaction(static fn () => $inbox->toAdmins(App\Domain\NotificationType::DonationLogged, 'Push test'));
+$pushed = $listener->getNotify(PDO::FETCH_ASSOC, 2000);
+check('A committed notification wakes listening streams for its recipients', is_array($pushed) && ($pushed['payload'] ?? '') === 'admin:*', json_encode($pushed));
+db()->run("DELETE FROM notifications WHERE title = 'Push test'");
 
 /* ------------------------------------------------------------------------- */
 section('Integrity');

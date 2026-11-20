@@ -11,14 +11,17 @@ Built with **PHP 8.5** and **PostgreSQL**. It has no framework and no Composer o
 | Area | What it does |
 |---|---|
 | **Two portals** | Hospital sign-in (`/login`) and blood bank staff sign-in (`/admin/login`), each with its own permissions. |
-| **Unit-level inventory** | Every bag is tracked individually with a unit code and a 35-day expiry. Stock is the count of screened, unexpired units, calculated live so it can't drift. Low and out-of-stock flags, waste figures and an expiring-soon panel. |
+| **Unit-level inventory** | Every bag is tracked individually with a unit code and a 35-day expiry. Stock is the count of screened, unexpired units, calculated live so it can't drift. Waste figures and an expiring-soon panel. |
+| **Days of supply** | Each group's stock is measured against its average daily use over the last 30 days and rated Healthy, Low (under 7 days), Critical (under 3) or Out. Alerts fire when a group's rating gets worse, so 6 bags of a rarely used group isn't flagged while 6 bags of O− is. |
+| **Donor recall** | For a short group, a ranked list of donors who are eligible to give again (not deferred, 56+ days since their last donation), with click-to-call, a call log (booked, reached, no answer, declined) and a CSV export for call sheets or SMS tools. |
+| **Availability for hospitals** | Hospitals see Available, Limited, Critical or Unavailable per group, never exact counts, so stock levels don't trigger panic-ordering. |
 | **Lab screening** | New donations are quarantined until screened. Pass (confirming or correcting the blood group) releases them to stock; fail discards them and defers the donor (permanently for HIV and hepatitis). |
 | **Expiry management** | Dispatch issues the soonest-expiring units first (FEFO). An automatic sweep expires out-of-date units and alerts staff about units expiring within 7 days. Every discard needs a reason. |
 | **Triage** | Requests carry a priority (routine, urgent or emergency) and an optional "needed by" time. Staff see a queue ordered by urgency, and emergencies raise an alert. |
 | **Request lifecycle** | Pending → In transit → Received, or Cancelled. Requests are never refused for low stock. Staff **allocate** at dispatch: the patient's group, compatible substitutes or a partial fill. The **hospital confirms receipt**. |
 | **Delivery tracker** | A three-step progress view with a timestamp for each step, shown to both hospitals and staff. |
 | **Compatibility matching** | The allocation dialog lists only compatible groups and suggests a split that spares O−. A full red-cell compatibility chart is on the Stock page. |
-| **Notifications** | An inbox for each account. Staff hear about new or withdrawn requests, walk-in donors, and groups that run low or out. Hospitals hear when their requests are dispatched, delivered or cancelled. Badges and a toast update live, without reloading the page. |
+| **Notifications** | An inbox for each account. Staff hear about new or withdrawn requests, walk-in donors, and groups that run low or out. Hospitals hear when their requests are dispatched, delivered or cancelled. Badges and a toast update live: real-time over Server-Sent Events fed by PostgreSQL `LISTEN`/`NOTIFY` on a production server, or by polling on the dev server. |
 | **Donors** | Returning donors are matched by name and phone instead of being duplicated. The 56-day donation interval and the blood group on record are enforced. |
 | **Donations** | Record, edit and remove donations. Stock adjusts automatically, and the app refuses changes that would remove bags already sent out. |
 | **Audit trail** | Every action on requests and donations is logged with who did it. Request trackers show names, and staff have an Activity page. |
@@ -54,9 +57,15 @@ Then open **http://localhost:8000**.
 
 Point the virtual host's document root at `public/`. Alternatively, drop the folder into `htdocs/`: the root `.htaccess` forwards requests into `public/`, and the URL prefix is detected automatically. Set `APP_BASE_PATH` in `.env` only if detection gets it wrong.
 
+### Real-time updates
+
+By default the browser checks for new notifications every 30 seconds (`REALTIME_MODE=poll`). That is the only mode that works on `php -S`, which handles one request at a time.
+
+On Apache or Nginx with PHP-FPM, set `REALTIME_MODE=sse` for instant updates. Each open page keeps one PHP worker for up to `STREAM_SECONDS` (25), then reconnects, so make sure there are enough workers for the people signed in at once. On the built-in server the app falls back to polling automatically, unless `PHP_CLI_SERVER_WORKERS` is 2 or more (Linux/macOS only).
+
 ## Tests
 
-The end-to-end suite drives the running app over HTTP the way a browser does (cookies, CSRF tokens, redirects) and checks the database after every step. It has **169 checks** covering both portals, permissions, triage, allocation (substitutes, partial fills and the rules that reject bad splits), FEFO unit issue, concurrent dispatch, screening (pass, re-group, fail, deferral), discards, the expiry sweep, receipt, returning donors, the audit log, notifications, validation, CSRF, the login throttle and a set of unit-level integrity checks. A separate unit suite (**33 checks**, no server needed) covers compatibility, allocation, screening outcomes and expiry labels.
+The end-to-end suite drives the running app over HTTP the way a browser does (cookies, CSRF tokens, redirects) and checks the database after every step. It has **194 checks** covering both portals, permissions, triage, allocation (substitutes, partial fills and the rules that reject bad splits), FEFO unit issue, concurrent dispatch, screening (pass, re-group, fail, deferral), discards, the expiry sweep, days-of-supply alerts, donor recall and its CSV export, hiding stock counts from hospitals, the live stream and its commit-only push, receipt, returning donors, the audit log, notifications, validation, CSRF, the login throttle and a set of unit-level integrity checks. A separate unit suite (**45 checks**, no server needed) covers compatibility, allocation, screening outcomes, expiry labels and supply levels.
 
 ```bash
 php -S 127.0.0.1:8000 -t public public/index.php   # terminal 1

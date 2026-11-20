@@ -12,8 +12,8 @@
  * @var int $screening                  donations awaiting screening
  * @var list<array<string, mixed>> $expiring  units expiring soon
  */
-$threshold = (int) config('inventory.low_stock_threshold');
-$low = array_filter($inventory, static fn ($i) => (int) $i['bags'] <= $threshold);
+/** @var array<string, array<string, mixed>> $supply */
+$low = array_filter($supply, static fn ($s) => $s['level']->needsRecall());
 $firstName = explode(' ', auth_user()['name'])[0];
 ?>
 <div class="page-head">
@@ -31,7 +31,7 @@ $firstName = explode(' ', auth_user()['name'])[0];
     <a href="<?= e(url('/stocks')) ?>" class="card stat tone-primary">
         <div class="stat-top"><span class="stat-label">Bags in stock</span><span class="stat-icon"><?= icon('droplet') ?></span></div>
         <div class="stat-value"><?= $totalStock ?></div>
-        <div class="stat-meta"><?= $low ? count($low) . ' group' . (count($low) > 1 ? 's' : '') . ' running low' : 'All groups healthy' ?></div>
+        <div class="stat-meta"><?= $low ? count($low) . ' group' . (count($low) > 1 ? 's' : '') . ' need a recall' : 'All groups have a healthy supply' ?></div>
     </a>
     <a href="<?= e(url('/requests', ['status' => 'pending'])) ?>" class="card stat tone-warning">
         <div class="stat-top"><span class="stat-label">Pending requests</span><span class="stat-icon"><?= icon('clock') ?></span></div>
@@ -76,7 +76,7 @@ $firstName = explode(' ', auth_user()['name'])[0];
         <h2 id="stock-heading">Stock by blood group</h2>
         <a class="link" href="<?= e(url('/stocks')) ?>">Details <?= icon('arrow-right', 'icon-sm') ?></a>
     </div>
-    <?php $items = $inventory; $wide = true; $linkToDonations = true; require BASE_PATH . '/views/partials/blood-grid.php'; ?>
+    <?php $items = $inventory; $wide = true; $linkToDonations = true; $bands = false; require BASE_PATH . '/views/partials/blood-grid.php'; ?>
 </section>
 
 <div class="grid-2 section">

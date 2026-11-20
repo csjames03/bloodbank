@@ -8,6 +8,7 @@ use App\Core\Database;
 use App\Domain\NotificationType as Type;
 use App\Domain\Priority;
 use App\Domain\RequestStatus;
+use App\Domain\SupplyLevel;
 use App\Repositories\AccountRepository;
 use App\Repositories\BloodTypeRepository;
 use App\Repositories\NotificationRepository;
@@ -25,6 +26,7 @@ final class Notifier
     private readonly RequestRepository $requests;
     private readonly BloodTypeRepository $bloodTypes;
     private readonly AccountRepository $accounts;
+    private readonly SupplyService $supply;
 
     public function __construct(?Database $db = null)
     {
@@ -33,6 +35,7 @@ final class Notifier
         $this->requests = new RequestRepository($db);
         $this->bloodTypes = new BloodTypeRepository($db);
         $this->accounts = new AccountRepository($db);
+        $this->supply = new SupplyService($db);
     }
 
     /** A new request: staff hear about hospital requests; hospitals hear about ones staff filed for them. */
@@ -162,15 +165,32 @@ final class Notifier
      */
     public function stockReduced(int $bloodTypeId, int $after, int $delta): void
     {
-        $before = $after - $delta;
-        $threshold = (int) config('inventory.low_stock_threshold', 5);
-        $code = $this->bloodTypes->find($bloodTypeId)['code'] ?? 'Blood';
-
-        if ($after === 0 && $before > 0) {
-            $this->inbox->toAdmins(Type::StockOut, "{$code} is out of stock", 'No bags left. New requests for this group will be refused.', '/stocks');
-        } elseif ($after > 0 && $after <= $threshold && $before > $threshold) {
-            $this->inbox->toAdmins(Type::StockLow, "{$code} is running low", sprintf('Only %s left.', plural($after, 'bag')), '/stocks');
+        $code = $this->bloodTypes->find($bloodTypeId)['code'] ?? null;
+        if ($code === null) {
+            return;
         }
+
+        // Alert only when the supply level gets worse (Healthy → Low → Critical → Out).
+        $levelBefore = $this->supply->levelFor($code, $after - $delta);
+        $levelAfter = $this->supply->levelFor($code, $after);
+        if ($levelAfter->severity() <= $levelBefore->severity() || !$levelAfter->needsRecall()) {
+            return;
+        }
+
+        $days = SupplyService::formatDays($after > 0 && $this->supply->dailyUse($code) > 0 ? $after / $this->supply->dailyUse($code) : null);
+        $eligible = $this->supply->eligibleDonors($code);
+        $recall = $eligible > 0
+            ? sprintf(' %s can be called in.', plural($eligible, 'eligible donor'))
+            : ' No eligible donors right now.';
+
+        match ($levelAfter) {
+            SupplyLevel::Out => $this->inbox->toAdmins(Type::StockOut, "{$code} is out of stock",
+                'No usable bags left. Pending requests can only be filled with compatible groups.' . $recall, "/recall?group={$code}"),
+            SupplyLevel::Critical => $this->inbox->toAdmins(Type::StockCritical, "{$code} is critical",
+                sprintf('%s left, %s of supply at the current rate.', plural($after, 'bag'), $days) . $recall, "/recall?group={$code}"),
+            default => $this->inbox->toAdmins(Type::StockLow, "{$code} is running low",
+                sprintf('%s left, %s of supply at the current rate.', plural($after, 'bag'), $days) . $recall, "/recall?group={$code}"),
+        };
     }
 
     /** @param array<string, int> $byCode code => units */

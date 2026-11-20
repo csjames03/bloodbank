@@ -152,7 +152,7 @@
     /* ---------------- Live notifications ---------------- */
     const pollUrl = document.body.dataset.notifPoll;
     if (pollUrl) {
-        const INTERVAL = 30000;
+        const INTERVAL = Math.max(5, parseInt(document.body.dataset.pollSeconds || '30', 10)) * 1000;
         const inboxUrl = document.body.dataset.notifPage;
         const baseTitle = document.title.replace(/^\(\d+\+?\)\s*/, '');
         let latest = parseInt(document.body.dataset.notifLatest || '0', 10);
@@ -225,14 +225,7 @@
                     stopped = true;
                     return;
                 }
-                const data = await res.json();
-                data.items.slice(-3).forEach(showToast);
-                if (data.items.length) ring();
-                latest = Math.max(latest, data.latest);
-                setCount(data.unread);
-                if (typeof data.pending === 'number') {
-                    $$('[data-pending-count]').forEach((n) => { n.textContent = String(data.pending); n.hidden = data.pending === 0; });
-                }
+                apply(await res.json());
             } catch {
                 // Offline or server restarting — try again next tick.
             } finally {
@@ -240,12 +233,50 @@
             }
         }
 
+        /** Same payload from polling and from the live stream. */
+        function apply(data) {
+            data.items.slice(-3).forEach(showToast);
+            if (data.items.length) ring();
+            latest = Math.max(latest, data.latest);
+            setCount(data.unread);
+            if (typeof data.pending === 'number') {
+                $$('[data-pending-count]').forEach((n) => { n.textContent = String(data.pending); n.hidden = data.pending === 0; });
+            }
+        }
+
+        const startPolling = () => {
+            schedule();
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') poll();
+                else clearTimeout(timer);
+            });
+        };
+
         setCount(parseInt(document.body.dataset.notifUnread || '0', 10));
-        schedule();
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') poll();
-            else clearTimeout(timer);
-        });
+
+        // Live stream (Server-Sent Events) when the server supports it; the
+        // browser reconnects on its own. If it keeps failing before ever
+        // delivering anything, fall back to polling.
+        const streamUrl = document.body.dataset.notifStream;
+        if (document.body.dataset.realtime === 'sse' && streamUrl && 'EventSource' in window) {
+            let delivered = false;
+            let failures = 0;
+            const es = new EventSource(`${streamUrl}?after=${latest}`, { withCredentials: true });
+            es.addEventListener('inbox', (e) => {
+                delivered = true;
+                failures = 0;
+                apply(JSON.parse(e.data));
+            });
+            es.addEventListener('error', () => {
+                failures += 1;
+                if (!delivered && failures >= 3) {
+                    es.close();
+                    startPolling();
+                }
+            });
+        } else {
+            startPolling();
+        }
     }
 
     /* ---------------- Filters: submit on change ---------------- */
@@ -259,6 +290,7 @@
     /* ---------------- Request form: live stock check ---------------- */
     $$('[data-request-form]').forEach((form) => {
         const stock = JSON.parse(form.dataset.stock || '{}');
+        const levels = form.dataset.levels ? JSON.parse(form.dataset.levels) : null;
         const compat = JSON.parse(form.dataset.compat || '{}');
         const notice = $('[data-stock-notice]', form);
         const message = $('[data-stock-message]', form);
@@ -267,6 +299,19 @@
             const type = form.elements.blood_type?.value;
             const bags = parseInt(form.elements.bags?.value || '0', 10);
             if (!type || !bags || !notice) return;
+
+            // Hospitals see supply levels, never counts.
+            if (levels) {
+                const lv = levels[type];
+                if (!lv || lv.level === 'healthy') {
+                    notice.hidden = true;
+                    return;
+                }
+                message.textContent = `${type} supply is ${lv.label.toLowerCase()} right now. You can still submit: ` +
+                    'the blood bank may send a compatible group or a partial amount.';
+                notice.hidden = false;
+                return;
+            }
 
             const available = stock[type] ?? 0;
             if (bags <= available) {
@@ -368,6 +413,28 @@
             e.stopImmediatePropagation();
             open(JSON.parse(form.dataset.allocate));
         }, true);
+    }
+
+    /* ---------------- Sign-in: demo accounts & Caps Lock ---------------- */
+    $$('[data-demo-user]').forEach((chip) =>
+        chip.addEventListener('click', () => {
+            const user = $('#username');
+            const pass = $('#password');
+            if (!user || !pass) return;
+            user.value = chip.dataset.demoUser;
+            pass.value = chip.dataset.demoPass;
+            $$('[data-demo-user]').forEach((c) => c.classList.toggle('is-picked', c === chip));
+            $('.auth-submit')?.focus();
+        }),
+    );
+
+    const capsHint = $('[data-caps-hint]');
+    const passInput = $('#password');
+    if (capsHint && passInput) {
+        const caps = (e) => { if (e.getModifierState) capsHint.hidden = !e.getModifierState('CapsLock'); };
+        passInput.addEventListener('keydown', caps);
+        passInput.addEventListener('keyup', caps);
+        passInput.addEventListener('blur', () => { capsHint.hidden = true; });
     }
 
     /* ---------------- Password visibility ---------------- */

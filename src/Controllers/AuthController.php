@@ -58,7 +58,7 @@ final class AuthController
 
         if ($this->lockedOut()) {
             back_with_errors(
-                ['username' => 'Too many failed attempts. Please wait a minute and try again.'],
+                ['auth' => 'Too many failed attempts. Please wait a minute and try again.'],
                 ['username' => $input['username']],
             );
         }
@@ -70,7 +70,7 @@ final class AuthController
 
         if ($account === null || !password_verify($input['password'], $account['password_hash'])) {
             $this->recordFailure();
-            back_with_errors(['username' => 'Incorrect username or password.'], ['username' => $input['username']]);
+            back_with_errors(['auth' => 'Incorrect username or password.'], ['username' => $input['username']]);
         }
 
         Session::forget('login_failures');

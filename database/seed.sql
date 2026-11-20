@@ -61,6 +61,54 @@ INSERT INTO donations (donor_id, blood_type_id, bags, donated_at)
 SELECT d.id, d.blood_type_id, CASE WHEN d.k % 3 = 0 THEN 2 ELSE 1 END, now() - make_interval(days => ((d.k * 7) % 34)::int, hours => ((d.k * 5) % 24)::int)
 FROM (SELECT id, blood_type_id, row_number() OVER (ORDER BY id) AS k FROM donors WHERE contact LIKE '0918555%') AS d;
 
+-- 40 lapsed donors who last gave 2–7 months ago: eligible to give again, so
+-- they make up the donor-recall lists.
+INSERT INTO donors (first_name, last_name, sex, age, contact, address, blood_type_id, medical_status, created_at)
+SELECT f.names[1 + (k * 7) % 24], l.names[1 + (k * 3) % 20],
+       CASE WHEN (k * 7) % 24 < 12 THEN 'Female' ELSE 'Male' END,
+       20 + (k * 11) % 38,
+       '0920' || lpad((5550000 + k)::text, 7, '0'),
+       t.towns[1 + (k * 3) % 8],
+       (SELECT id FROM blood_types WHERE code = g.codes[1 + (k - 1) % 16]),
+       'Fit to donate', now() - make_interval(days => 300 + k)
+FROM generate_series(1, 40) AS k,
+     (SELECT ARRAY['Andrea','Bianca','Carla','Diana','Elena','Faith','Gina','Hazel','Iris','Jasmine','Katrina','Lara',
+                   'Adrian','Bryan','Cedric','Dennis','Edgar','Felix','Gabriel','Henry','Ivan','Joel','Kevin','Leo']) AS f(names),
+     (SELECT ARRAY['Santos','Reyes','Cruz','Bautista','Ocampo','Garcia','Mendoza','Torres','Flores','Villanueva',
+                   'Ramos','Aquino','Castro','Rivera','Navarro','Salazar','Domingo','Pascual','Mercado','Lim']) AS l(names),
+     (SELECT ARRAY['Angeles City, Pampanga','San Fernando, Pampanga','Mabalacat, Pampanga','Tarlac City, Tarlac',
+                   'Clark Freeport Zone','Porac, Pampanga','Capas, Tarlac','Magalang, Pampanga']) AS t(towns),
+     (SELECT ARRAY['O-','O+','A+','B+','O-','A-','O+','B-','AB+','O-','A+','AB-','O+','B+','O-','A+']) AS g(codes);
+
+INSERT INTO donations (donor_id, blood_type_id, bags, donated_at)
+SELECT d.id, d.blood_type_id, 1, now() - make_interval(days => (60 + (d.k * 13) % 140)::int, hours => ((d.k * 3) % 24)::int)
+FROM (SELECT id, blood_type_id, row_number() OVER (ORDER BY id) AS k FROM donors WHERE contact LIKE '0920555%') AS d;
+
+-- 150 donors from the last month whose blood has already been issued: this is
+-- the recent demand that "days of supply" is calculated from. O- is in heavy
+-- demand (the universal donor), so it runs low.
+INSERT INTO donors (first_name, last_name, sex, age, contact, address, blood_type_id, medical_status, created_at)
+SELECT f.names[1 + (k * 5) % 24], l.names[1 + (k * 7) % 20],
+       CASE WHEN (k * 5) % 24 < 12 THEN 'Female' ELSE 'Male' END,
+       19 + (k * 13) % 40,
+       '0919' || lpad((5550000 + k)::text, 7, '0'),
+       t.towns[1 + (k * 5) % 8],
+       (SELECT id FROM blood_types WHERE code = g.codes[1 + (k - 1) % 30]),
+       'Fit to donate', now() - make_interval(days => 200 + k)
+FROM generate_series(1, 150) AS k,
+     (SELECT ARRAY['Andrea','Bianca','Carla','Diana','Elena','Faith','Gina','Hazel','Iris','Jasmine','Katrina','Lara',
+                   'Adrian','Bryan','Cedric','Dennis','Edgar','Felix','Gabriel','Henry','Ivan','Joel','Kevin','Leo']) AS f(names),
+     (SELECT ARRAY['Santos','Reyes','Cruz','Bautista','Ocampo','Garcia','Mendoza','Torres','Flores','Villanueva',
+                   'Ramos','Aquino','Castro','Rivera','Navarro','Salazar','Domingo','Pascual','Mercado','Lim']) AS l(names),
+     (SELECT ARRAY['Angeles City, Pampanga','San Fernando, Pampanga','Mabalacat, Pampanga','Tarlac City, Tarlac',
+                   'Clark Freeport Zone','Porac, Pampanga','Capas, Tarlac','Magalang, Pampanga']) AS t(towns),
+     (SELECT ARRAY['O+','A+','O-','B+','O+','A+','O-','O+','B+','A-','O+','A+','O-','B-','O+',
+                   'B+','A+','O-','O+','AB+','A+','O-','B+','O+','A-','O-','A+','B-','O-','AB-']) AS g(codes);
+
+INSERT INTO donations (donor_id, blood_type_id, bags, donated_at)
+SELECT d.id, d.blood_type_id, 1, now() - make_interval(days => (8 + (d.k * 11) % 26)::int, hours => ((d.k * 7) % 24)::int)
+FROM (SELECT id, blood_type_id, row_number() OVER (ORDER BY id) AS k FROM donors WHERE contact LIKE '0919555%') AS d;
+
 -- One unit per bag. The last 36 hours of collections are still in quarantine
 -- awaiting screening; earlier ones were screened a day after collection.
 INSERT INTO blood_units (donation_id, blood_type_id, status, collected_at, expires_at, screened_at)
@@ -106,6 +154,35 @@ UPDATE blood_units u SET status = 'dispatched', request_id = h.rid, dispatched_a
 FROM seed_history h WHERE u.id = ANY (h.ids);
 
 DROP TABLE seed_history;
+
+-- Last month's demand: the recent donors' units were issued two days after
+-- collection, grouped into one ward restock per group per day.
+CREATE TEMP TABLE seed_recent AS
+SELECT nextval(pg_get_serial_sequence('blood_requests', 'id')) AS rid, b.*
+FROM (
+    SELECT u.blood_type_id, date_trunc('day', u.collected_at) AS day,
+           array_agg(u.id ORDER BY u.id) AS ids, COUNT(*) AS n, MAX(u.collected_at) AS last_collected
+    FROM blood_units u
+    JOIN donations dn ON dn.id = u.donation_id
+    JOIN donors d ON d.id = dn.donor_id
+    WHERE d.contact LIKE '0919555%' AND u.status = 'available'
+    GROUP BY 1, 2
+) AS b;
+
+INSERT INTO blood_requests (id, hospital_id, blood_type_id, doctor_name, bags, priority, status,
+                            requested_at, approved_at, completed_at)
+SELECT h.rid, (SELECT id FROM hospitals ORDER BY id OFFSET (h.rid % 3) LIMIT 1), h.blood_type_id,
+       'Ward stock replenishment', h.n, 'routine', 'completed',
+       h.last_collected + INTERVAL '2 days', h.last_collected + INTERVAL '2 days 1 hour', h.last_collected + INTERVAL '2 days 5 hours'
+FROM seed_recent h;
+
+INSERT INTO request_allocations (request_id, blood_type_id, bags)
+SELECT rid, blood_type_id, n FROM seed_recent;
+
+UPDATE blood_units u SET status = 'dispatched', request_id = h.rid, dispatched_at = h.last_collected + INTERVAL '2 days 1 hour'
+FROM seed_recent h WHERE u.id = ANY (h.ids);
+
+DROP TABLE seed_recent;
 
 INSERT INTO blood_requests (hospital_id, blood_type_id, doctor_name, bags, priority, needed_by, status,
                             requested_at, approved_at, completed_at, cancelled_at)
@@ -228,10 +305,10 @@ WHERE r.status = 'cancelled';
 
 INSERT INTO notifications (recipient_role, recipient_id, type, title, body, link, created_at)
 SELECT 'admin', a.id, 'stock_low', bt.code || ' is running low',
-       'Only ' || (SELECT COUNT(*) FROM blood_units u WHERE u.blood_type_id = bt.id AND u.status = 'available' AND u.expires_at > now()) || ' bags left.',
-       '/stocks', now() - INTERVAL '20 minutes'
+       'Only ' || (SELECT COUNT(*) FROM blood_units u WHERE u.blood_type_id = bt.id AND u.status = 'available' AND u.expires_at > now()) || ' bags left. Call in eligible donors.',
+       '/recall?group=' || bt.code, now() - INTERVAL '20 minutes'
 FROM blood_types bt CROSS JOIN admins a
-WHERE bt.code = 'AB-';
+WHERE bt.code = 'O-';
 
 INSERT INTO notifications (recipient_role, recipient_id, type, title, body, link, request_id, created_at, read_at)
 SELECT 'hospital', r.hospital_id, 'request_dispatched',

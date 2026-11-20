@@ -22,6 +22,7 @@ final class NotificationRepository extends Repository
              SELECT 'admin', id, ?, ?, ?, ?, ? FROM admins",
             [$type->value, $title, $body, $link, $requestId],
         );
+        $this->signal('admin:*');
     }
 
     public function toHospital(int $hospitalId, NotificationType $type, string $title, string $body = '', ?string $link = null, ?int $requestId = null): void
@@ -31,6 +32,20 @@ final class NotificationRepository extends Repository
              VALUES ('hospital', ?, ?, ?, ?, ?, ?)",
             [$hospitalId, $type->value, $title, $body, $link, $requestId],
         );
+        $this->signal("hospital:{$hospitalId}");
+    }
+
+    /** Channel that live-update streams LISTEN on. */
+    public const CHANNEL = 'lifeline_inbox';
+
+    /**
+     * Wake any open live-update streams for this recipient. PostgreSQL only
+     * delivers a NOTIFY when the surrounding transaction commits, so a
+     * rolled-back action never pushes anything.
+     */
+    private function signal(string $recipient): void
+    {
+        $this->db->run('SELECT pg_notify(?, ?)', [self::CHANNEL, $recipient]);
     }
 
     public function paginate(string $role, int $id, bool $unreadOnly, int $page, int $perPage): Paginator

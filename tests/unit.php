@@ -16,6 +16,8 @@ use App\Domain\DiscardReason as D;
 use App\Domain\Priority;
 use App\Domain\RequestStatus as S;
 use App\Domain\ScreeningFailure as F;
+use App\Domain\SupplyLevel as L;
+use App\Services\SupplyService;
 use App\Domain\UnitStatus as U;
 
 Config::set(require dirname(__DIR__) . '/config/config.php');
@@ -79,6 +81,22 @@ check('Expiry in a few hours', expiry_label(date(DATE_ATOM, time() + 5 * 3600 + 
 check('Already expired', expiry_label(date(DATE_ATOM, time() - 2 * 86400 - 60)) === 'expired 2 days ago');
 check('Inside the warning window is danger', expiry_tone(date(DATE_ATOM, time() + 2 * 86400)) === 'danger');
 check('Far from expiry is neutral', expiry_tone(date(DATE_ATOM, time() + 30 * 86400)) === 'neutral');
+
+echo PHP_EOL . "\033[1mDays of supply\033[0m" . PHP_EOL;
+$lvl = static fn (int $bags, float $daily) => L::assess($bags, $daily, 3, 7, 5);
+check('No bags is Out', $lvl(0, 2.0) === L::Out && $lvl(0, 0) === L::Out);
+check('7+ days of supply is Healthy', $lvl(14, 2.0) === L::Healthy);
+check('Under 7 days is Low', $lvl(13, 2.0) === L::Low);
+check('Under 3 days is Critical', $lvl(5, 2.0) === L::Critical);
+check('Exactly on a boundary rounds to the better level', $lvl(6, 2.0) === L::Low && $lvl(14, 2.0) === L::Healthy);
+check('6 bags is Healthy when the group is used once a week', $lvl(6, 1 / 7) === L::Healthy);
+check('…but Critical when it is used five times a day', $lvl(6, 5.0) === L::Critical);
+check('With no usage history, the bag threshold decides', $lvl(5, 0) === L::Low && $lvl(6, 0) === L::Healthy);
+check('Severity orders the levels', L::Healthy->severity() < L::Low->severity() && L::Low->severity() < L::Critical->severity() && L::Critical->severity() < L::Out->severity());
+check('Recall starts at Low', !L::Healthy->needsRecall() && L::Low->needsRecall() && L::Out->needsRecall());
+check('Hospitals see plain availability words', L::Healthy->hospitalLabel() === 'Available' && L::Low->hospitalLabel() === 'Limited' && L::Out->hospitalLabel() === 'Unavailable');
+check('Days format', SupplyService::formatDays(4.5) === '≈ 4.5 days' && SupplyService::formatDays(3.0) === '≈ 3 days'
+    && SupplyService::formatDays(0.4) === '< 1 day' && SupplyService::formatDays(90) === '> 60 days' && SupplyService::formatDays(null) === 'no recent use');
 
 echo PHP_EOL . ($failed === 0 ? "\033[32m" : "\033[31m") . "{$passed} passed, {$failed} failed\033[0m" . PHP_EOL;
 exit($failed === 0 ? 0 : 1);

@@ -18,6 +18,7 @@ use App\Repositories\AccountRepository;
 use App\Repositories\BloodTypeRepository;
 use App\Repositories\RequestRepository;
 use App\Services\RequestService;
+use App\Services\SupplyService;
 
 final class RequestController
 {
@@ -43,7 +44,8 @@ final class RequestController
                 (int) config('pagination.per_page'),
             ),
             'summary'   => $requests->summary($filters['hospital_id']),
-            'stock'     => (new BloodTypeRepository())->stockByCode(),
+            'stock'     => Auth::isAdmin() ? (new BloodTypeRepository())->stockByCode() : [],
+            'levels'    => Auth::isAdmin() ? [] : (new SupplyService())->hospitalLevels(),
             'expiry'    => Auth::isAdmin() ? (new BloodTypeRepository())->earliestExpiry() : [],
             'hospitals' => Auth::isAdmin() ? (new AccountRepository())->hospitals() : [],
         ]);
@@ -107,12 +109,29 @@ final class RequestController
             $group->value,
         );
         $available = (new BloodTypeRepository())->stockByCode()[$group->value] ?? 0;
-        if ($data['bags'] > $available) {
-            $message .= sprintf(
-                ' Only %s of %s are in stock right now, so the blood bank may send a compatible group or a partial amount.',
-                plural($available, 'bag'),
-                $group->value,
-            );
+        if (Auth::isAdmin()) {
+            if ($data['bags'] > $available) {
+                $message .= sprintf(
+                    ' Only %s of %s are in stock right now, so you may need a compatible group or a partial fill.',
+                    plural($available, 'bag'),
+                    $group->value,
+                );
+            }
+        } else {
+            // Hospitals get the supply level, not the count.
+            $level = (new SupplyService())->levelFor($group->value, $available);
+            if ($level->needsRecall()) {
+                $message .= sprintf(
+                    ' %s supply is %s right now, so the blood bank may send a compatible group or a partial amount.',
+                    $group->value,
+                    strtolower($level->hospitalLabel()),
+                );
+            } elseif ($data['bags'] > $available) {
+                $message .= sprintf(
+                    ' That is more %s than the blood bank holds at the moment, so it may send a compatible group or a partial amount.',
+                    $group->value,
+                );
+            }
         }
 
         flash('success', $message);

@@ -50,6 +50,27 @@ final class BloodTypeRepository extends Repository
     }
 
     /**
+     * Units issued to hospitals per group over the last `$days` days
+     * (recalled units don't count — they came back).
+     *
+     * @return array<string, int> code => units
+     */
+    public function issuedSince(int $days): array
+    {
+        return array_map('intval', array_column($this->db->all(
+            "SELECT bt.code, COUNT(u.id) AS n
+             FROM blood_types bt
+             LEFT JOIN blood_units u ON u.blood_type_id = bt.id AND u.status = 'dispatched'
+                  AND u.dispatched_at >= now() - make_interval(days => ?)
+                  -- now() is the transaction start, so a dispatch being made right
+                  -- now doesn't inflate the rate it is measured against.
+                  AND u.dispatched_at < now()
+             GROUP BY bt.code",
+            [$days],
+        ), 'n', 'code'));
+    }
+
+    /**
      * Earliest expiry among available units, per group.
      *
      * @return array<string, string> code => timestamp

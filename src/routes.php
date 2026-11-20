@@ -7,6 +7,7 @@ use App\Controllers\AuthController;
 use App\Controllers\DashboardController;
 use App\Controllers\DonationController;
 use App\Controllers\NotificationController;
+use App\Controllers\RecallController;
 use App\Controllers\RequestController;
 use App\Controllers\ScreeningController;
 use App\Controllers\UnitController;
@@ -49,12 +50,18 @@ $router->post('/screening/{id}/fail', [ScreeningController::class, 'fail'], 'adm
 $router->get('/units', [UnitController::class, 'index'], 'admin');
 $router->post('/units/{id}/discard', [UnitController::class, 'discard'], 'admin');
 
+// Donor recall
+$router->get('/recall', [RecallController::class, 'index'], 'admin');
+$router->get('/recall/export', [RecallController::class, 'export'], 'admin');
+$router->post('/recall/{id}/contact', [RecallController::class, 'contact'], 'admin');
+
 // Audit trail
 $router->get('/activity', [ActivityController::class, 'index'], 'admin');
 
 // Notifications — every user has their own inbox.
 $router->get('/notifications', [NotificationController::class, 'index'], 'auth');
 $router->get('/notifications/poll', [NotificationController::class, 'poll'], 'auth');
+$router->get('/notifications/stream', [NotificationController::class, 'stream'], 'auth');
 $router->post('/notifications/read-all', [NotificationController::class, 'readAll'], 'auth');
 $router->post('/notifications/{id}/open', [NotificationController::class, 'open'], 'auth');
 

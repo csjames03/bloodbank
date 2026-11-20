@@ -1,12 +1,12 @@
 <?php
 /**
  * @var array<string, mixed> $hospital
- * @var list<array<string, mixed>> $stock
- * @var array<string, int> $stockByCode
+ * @var list<array<string, mixed>> $stock       groups (counts withheld)
+ * @var array<string, array<string, mixed>> $supply
+ * @var array<string, array{level: string, label: string}> $levels
  * @var array<string, array{count: int, bags: int}> $summary
  * @var list<array<string, mixed>> $requests
  */
-$stockForDialog = $stockByCode;
 ?>
 <div class="page-head">
     <div>
@@ -63,9 +63,10 @@ $stockForDialog = $stockByCode;
         <section class="card card-pad" aria-labelledby="availability-heading">
             <div class="section-head">
                 <h2 id="availability-heading">Available now</h2>
-                <span class="muted" style="font-size:13px"><?= array_sum($stockByCode) ?> bags total</span>
+                <span class="muted" style="font-size:13px">Live supply levels</span>
             </div>
-            <?php $items = $stock; $wide = false; $linkToDonations = false; require BASE_PATH . '/views/partials/blood-grid.php'; ?>
+            <?php $items = $stock; $wide = false; $linkToDonations = false; $bands = true; require BASE_PATH . '/views/partials/blood-grid.php'; ?>
+            <p class="field-hint" style="margin-top:10px"><strong>Limited</strong> or <strong>Critical</strong>: still request what you need. The blood bank may send a compatible group or a partial amount.</p>
         </section>
 
         <div class="quick-actions">
@@ -81,5 +82,5 @@ $stockForDialog = $stockByCode;
     </div>
 </div>
 
-<?php $stock = $stockForDialog; $hospitals = []; require BASE_PATH . '/views/partials/request-dialog.php'; ?>
+<?php $stock = []; $hospitals = []; require BASE_PATH . '/views/partials/request-dialog.php'; ?>
 <?php $dialogId = 'donation-create'; require BASE_PATH . '/views/partials/donation-dialog.php'; ?>

@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.4.0 — Days of supply, donor recall and live updates (2026-11-20)
+
+The app now looks ahead: it measures how long stock will last, points staff to the donors to call, and pushes updates as they happen.
+
+### Changed
+
+- **Stock alerts are based on days of supply, not a fixed bag count.** Each group's usable units are divided by its average daily issue over the last 30 days. Groups are rated Healthy (7+ days), Low (under 7), Critical (under 3) or Out. Alerts fire only when a group's level gets worse, state the days left and the number of eligible donors, and link to the recall list. A new `stock_critical` alert sits between Low and Out.
+- **Hospitals see availability levels, not counts:** Available, Limited, Critical or Unavailable. Exact numbers are no longer in hospital pages, request-form data or confirmation messages.
+- The out-of-stock alert no longer says new requests will be refused. Since 2.2.0 they never are.
+- **Redesigned sign-in page.** It has a brand panel with an animated heartbeat line and current feature highlights (a compact header on phones), and a card with a portal switch and icon inputs. A failed sign-in shows one inline error banner instead of a toast plus a field error, and there is a Caps Lock warning. Demo-account chips fill in the credentials in one tap, and a link switches to the other portal. The animation respects reduced-motion settings.
+
+### Added
+
+- **Days of supply** on the stock page (with average daily use per group), on dashboard tiles, and as an "N groups need a recall" figure.
+- **Donor recall page** (`/recall`, with a nav badge):
+  - opens on the worst group, with a strip showing every group's days of supply;
+  - lists eligible donors (not deferred, 56+ days since their last donation), not-recently-called first, then most loyal, then longest rested;
+  - click-to-call phone numbers and a call log (booked, reached, no answer, declined; with a note). Called donors drop down the list for 7 days;
+  - CSV export of the call list.
+- New `donor_contacts` table. Calls appear in the audit log.
+- **Real-time updates over Server-Sent Events** (`REALTIME_MODE=sse`): `/notifications/stream` waits on PostgreSQL `LISTEN`/`NOTIFY`, which `NotificationRepository` signals whenever it stores a notification. Pushes are only delivered on commit. The stream reconnects automatically with `Last-Event-ID` and falls back to polling. It is disabled automatically on the single-threaded `php -S`.
+- `Database` now connects with `PDO::connect()` (giving `Pdo\Pgsql` with `getNotify()`) and has `listen()` / `waitForNotify()`.
+- Config: `SUPPLY_WINDOW_DAYS`, `SUPPLY_LOW_DAYS`, `SUPPLY_CRITICAL_DAYS`, `RECALL_COOLDOWN_DAYS`, `REALTIME_MODE`, `POLL_SECONDS`, `STREAM_SECONDS`.
+- **Demo data:** 40 lapsed donors who make up the recall lists, and 150 recent donors whose units were issued over the past month. This gives real usage history, and O− (in heavy demand as the universal donor) shows as Low.
+
+### Tests
+
+- The e2e suite grew from 169 to 194 checks:
+  - days-of-supply display and the Low alert (built from live usage data);
+  - recall eligibility, ranking, call logging and its refusals, the audit entry, the CSV export, and staff-only access;
+  - hospitals never receiving stock counts;
+  - the stream's SSE format and guest refusal;
+  - a direct test that `NOTIFY` reaches listeners only after commit, never after rollback.
+- The unit suite grew from 33 to 45 checks (supply levels and boundaries, labels, day formatting).
+
+### Fixed
+
+- A dispatch was being measured against a usage rate that already included itself, which could hide the alert it should trigger.
+- Inline action panels (Log call, Discard) now take the full row width on phones.
 ## 2.3.0 — Unit-level inventory, screening and expiry (2026-11-19)
 
 Stock is no longer a number per blood group. Every bag is tracked individually from collection to dispatch, so the stock figure reflects only blood that is screened, in date and usable.

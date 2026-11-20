@@ -2,10 +2,14 @@
 /**
  * @var list<array<string, mixed>> $inventory
  * @var array{available: int, expiring: int, quarantine: int, wasted: int, donated: int, dispatched: int, pending: int} $totals
+ * @var array<string, array<string, mixed>> $supply  code => SupplyService forecast row
  */
 use App\Domain\BloodGroup;
+use App\Services\SupplyService;
 
-$threshold = (int) config('inventory.low_stock_threshold');
+$window = (int) config('supply.usage_window_days');
+$critical = (float) config('supply.critical_days');
+$low = (float) config('supply.low_days');
 $warn = (int) config('inventory.expiry_warning_days');
 $shelf = (int) config('inventory.shelf_life_days');
 $max = max(1, ...array_map(static fn ($i) => (int) $i['bags'], $inventory));
@@ -13,7 +17,7 @@ $max = max(1, ...array_map(static fn ($i) => (int) $i['bags'], $inventory));
 <div class="page-head">
     <div>
         <h1>Blood stock</h1>
-        <p>Usable units per group: screened, unexpired and in storage. Whole blood keeps <?= $shelf ?> days, and groups at or below <?= plural($threshold, 'bag') ?> are flagged as low.</p>
+        <p>Usable units per group: screened, unexpired and in storage. Whole blood keeps <?= $shelf ?> days. <strong>Days of supply</strong> = available units ÷ average daily use over the last <?= $window ?> days: under <?= $low + 0 ?> days is Low, under <?= $critical + 0 ?> is Critical.</p>
     </div>
     <div class="page-actions">
         <a class="btn" href="<?= e(url('/units', ['status' => 'expiring'])) ?>"><?= icon('clock', 'icon-sm') ?> Expiring units</a>
@@ -50,19 +54,23 @@ $max = max(1, ...array_map(static fn ($i) => (int) $i['bags'], $inventory));
         <thead>
             <tr>
                 <th scope="col">Group</th>
-                <th scope="col" style="width:26%">Available</th>
+                <th scope="col" style="width:22%">Available</th>
+                <th scope="col">Days of supply</th>
                 <th scope="col" class="num">Expiring</th>
                 <th scope="col">Next expiry</th>
                 <th scope="col" class="num">Quarantine</th>
                 <th scope="col" class="num">Pending demand</th>
-                <th scope="col">Status</th>
+                <th scope="col">Supply</th>
             </tr>
         </thead>
         <tbody>
             <?php foreach ($inventory as $row):
                 $bags = (int) $row['bags'];
                 $pending = (int) $row['pending'];
-                $tile = $bags === 0 ? 'is-empty' : ($bags <= $threshold ? 'is-low' : '');
+                $sup = $supply[$row['code']];
+                /** @var App\Domain\SupplyLevel $level */
+                $level = $sup['level'];
+                $tile = match ($level->value) { 'out' => 'is-empty', 'low', 'critical' => 'is-low', default => '' };
             ?>
                 <tr>
                     <td data-label="Group"><a href="<?= e(url('/units', ['type' => $row['code'], 'status' => 'available'])) ?>" class="blood-code"><?= e($row['code']) ?></a></td>
@@ -71,6 +79,10 @@ $max = max(1, ...array_map(static fn ($i) => (int) $i['bags'], $inventory));
                             <div class="blood-bags" style="font-size:18px"><?= $bags ?><small><?= $bags === 1 ? 'bag' : 'bags' ?></small></div>
                             <div class="meter"><span style="width: <?= round($bags / $max * 100) ?>%"></span></div>
                         </div>
+                    </td>
+                    <td data-label="Days of supply">
+                        <strong class="tone-text-<?= e($level->tone() === 'success' ? 'neutral' : $level->tone()) ?>"><?= e(SupplyService::formatDays($sup['days'])) ?></strong>
+                        <div class="list-sub"><?= e(rtrim(rtrim(number_format($sup['daily_use'], 2), '0'), '.') ?: '0') ?>/day used</div>
                     </td>
                     <td data-label="Expiring" class="num"><?= (int) $row['expiring'] ?: '—' ?></td>
                     <td data-label="Next expiry">
@@ -81,15 +93,11 @@ $max = max(1, ...array_map(static fn ($i) => (int) $i['bags'], $inventory));
                     </td>
                     <td data-label="Quarantine" class="num"><?= (int) $row['quarantine'] ?: '—' ?></td>
                     <td data-label="Pending" class="num"><?= $pending ?: '—' ?></td>
-                    <td data-label="Status">
-                        <?php if ($bags === 0): ?>
-                            <span class="badge badge-danger">Out of stock</span>
-                        <?php elseif ($pending > $bags): ?>
-                            <span class="badge badge-danger">Short <?= $pending - $bags ?></span>
-                        <?php elseif ($bags <= $threshold): ?>
-                            <span class="badge badge-warning">Low</span>
-                        <?php else: ?>
-                            <span class="badge badge-success">Healthy</span>
+                    <td data-label="Supply">
+                        <span class="badge badge-<?= e($level->tone()) ?>"><?= e($level->label()) ?></span>
+                        <?php if ($pending > $bags): ?><span class="badge badge-danger plain">Short <?= $pending - $bags ?></span><?php endif; ?>
+                        <?php if ($level->needsRecall()): ?>
+                            <div><a class="link" style="font-size:12.5px" href="<?= e(url('/recall', ['group' => $row['code']])) ?>">Recall <?= plural((int) $sup['eligible'], 'donor') ?></a></div>
                         <?php endif; ?>
                     </td>
                 </tr>

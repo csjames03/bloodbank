@@ -11,6 +11,7 @@ use App\Repositories\BloodTypeRepository;
 use App\Repositories\DonationRepository;
 use App\Repositories\RequestRepository;
 use App\Repositories\UnitRepository;
+use App\Services\SupplyService;
 
 final class DashboardController
 {
@@ -36,19 +37,22 @@ final class DashboardController
             'hospitals'  => (new AccountRepository())->hospitals(),
             'screening'  => (new UnitRepository())->quarantinedDonations(),
             'expiring'   => (new UnitRepository())->expiringSoon((int) config('inventory.expiry_warning_days'), 6),
+            'supply'     => (new SupplyService())->byCode(),
         ]);
     }
 
     private function hospital(): void
     {
         $hospitalId = (int) Auth::id();
-        $stock = (new BloodTypeRepository())->all();
+        $supply = new SupplyService();
 
+        // Hospitals see availability levels, never exact counts.
         View::render('dashboard/hospital', [
             'title'    => 'Dashboard',
             'hospital' => (new AccountRepository())->findHospital($hospitalId),
-            'stock'    => $stock,
-            'stockByCode' => array_column($stock, 'bags', 'code'),
+            'stock'    => array_map(static fn ($g) => ['code' => $g['code'], 'bags' => 0], (new BloodTypeRepository())->all()),
+            'supply'   => $supply->byCode(),
+            'levels'   => $supply->hospitalLevels(),
             'summary'  => (new RequestRepository())->summary($hospitalId),
             'requests' => (new RequestRepository())->recent(5, $hospitalId),
         ]);
